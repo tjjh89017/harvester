@@ -45,6 +45,7 @@ replace (
 
 	kubevirt.io/api => github.com/kubevirt/api v0.54.0
 	kubevirt.io/client-go => github.com/kubevirt/client-go v0.54.0
+	launchpad.net/gocheck v0.0.0-20140225173054-000000000087 => github.com/go-check/check v0.0.0-20180628173108-788fd7840127
 	sigs.k8s.io/cluster-api => sigs.k8s.io/cluster-api v1.1.4
 	sigs.k8s.io/structured-merge-diff => sigs.k8s.io/structured-merge-diff v0.0.0-20190302045857-e85c7b244fd2
 )
@@ -69,6 +70,7 @@ require (
 	github.com/onsi/gomega v1.19.0
 	github.com/openshift/api v0.0.0
 	github.com/pkg/errors v0.9.1
+	github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring v0.52.0
 	github.com/rancher/apiserver v0.0.0-20211025232108-df28932a5627
 	github.com/rancher/dynamiclistener v0.3.4
 	github.com/rancher/fleet/pkg/apis v0.0.0-20210918015053-5a141a6b18f0
