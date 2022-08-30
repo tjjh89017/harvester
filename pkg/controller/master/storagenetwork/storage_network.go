@@ -28,9 +28,19 @@ import (
 )
 
 const (
-	ControllerName = "harvester-backup-target-controller"
+	ControllerName                  = "harvester-backup-target-controller"
+	StorageNetworkAnnotation        = "storage-network.settings.harvesterhci.io"
+	ReplicaStorageNetworkAnnotation = StorageNetworkAnnotation + "/replica"
+	PausedStorageNetworkAnnotation  = StorageNetworkAnnotation + "/paused"
 
 	longhornStorageNetworkName = "storage-network"
+
+	// Rancher monitoring
+	CattleMonitoringSystemNamespace = "cattle-monitoring-system"
+	RancherMonitoringPrometheus     = "rancher-monitoring-prometheus"
+	FleetLocalNamespace             = "fleet-local"
+	RancherMonitoring               = "rancher-monitoring"
+	RancherMonitoringGrafana        = "rancher-monitoring-grafana"
 )
 
 type Handler struct {
@@ -128,7 +138,7 @@ func (h *Handler) OnStorageNetworkChange(key string, setting *harvesterv1.Settin
 
 // true: all detach
 func (h *Handler) checkLonghornVolumeDetach() bool {
-	if volumes, err := h.longhornVolumeCache.List("longhorn-system", labels.Everything()); err == nil {
+	if volumes, err := h.longhornVolumeCache.List(util.LonghornSystemNamespaceName, labels.Everything()); err == nil {
 		for _, volume := range volumes {
 			logrus.Infof("volume state: %v", volume.Status.State)
 			if volume.Status.State != "detached" {
@@ -147,17 +157,17 @@ func (h *Handler) checkPodStatusAndStart() bool {
 	allStarted := true
 
 	// check prometheus cattle-monitoring-system/rancher-monitoring-prometheus replica
-	if prometheus, err := h.prometheusCache.Get("cattle-monitoring-system", "rancher-monitoring-prometheus"); err == nil {
+	if prometheus, err := h.prometheusCache.Get(CattleMonitoringSystemNamespace, RancherMonitoringPrometheus); err == nil {
 		logrus.Infof("prometheus: %v", *prometheus.Spec.Replicas)
 		// check started or not
 		if *prometheus.Spec.Replicas == 0 {
 			logrus.Infof("start prometheus")
 			allStarted = false
 			prometheusCopy := prometheus.DeepCopy()
-			if replicas, err := strconv.Atoi(prometheus.Annotations["storage-network.settings.harvesterhci.io/replica"]); err == nil {
+			if replicas, err := strconv.Atoi(prometheus.Annotations[ReplicaStorageNetworkAnnotation]); err == nil {
 				*prometheusCopy.Spec.Replicas = int32(replicas)
 			}
-			delete(prometheusCopy.Annotations, "storage-network.settings.harvesterhci.io/replica")
+			delete(prometheusCopy.Annotations, ReplicaStorageNetworkAnnotation)
 
 			if _, err := h.prometheus.Update(prometheusCopy); err != nil {
 				logrus.Warnf("prometheus update error %v", err)
@@ -166,7 +176,7 @@ func (h *Handler) checkPodStatusAndStart() bool {
 	}
 
 	// check managedchart fleet-local/rancher-monitoring paused
-	if monitoring, err := h.managedChartCache.Get("fleet-local", "rancher-monitoring"); err == nil {
+	if monitoring, err := h.managedChartCache.Get(FleetLocalNamespace, RancherMonitoring); err == nil {
 		logrus.Infof("Rancher Monitoring: %v", monitoring.Spec.Paused)
 		// check pause or not
 		if monitoring.Spec.Paused {
@@ -174,7 +184,7 @@ func (h *Handler) checkPodStatusAndStart() bool {
 			allStarted = false
 			monitoringCopy := monitoring.DeepCopy()
 			monitoringCopy.Spec.Paused = false
-			delete(monitoringCopy.Annotations, "storage-network.settings.harvesterhci.io/paused")
+			delete(monitoringCopy.Annotations, PausedStorageNetworkAnnotation)
 
 			if _, err := h.managedCharts.Update(monitoringCopy); err != nil {
 				logrus.Warnf("rancher monitoring error %v", err)
@@ -183,17 +193,17 @@ func (h *Handler) checkPodStatusAndStart() bool {
 	}
 
 	// check deployment cattle-monitoring-system/rancher-monitoring-grafana replica
-	if grafana, err := h.deploymentCache.Get("cattle-monitoring-system", "rancher-monitoring-grafana"); err == nil {
+	if grafana, err := h.deploymentCache.Get(CattleMonitoringSystemNamespace, RancherMonitoringGrafana); err == nil {
 		logrus.Infof("Grafana: %v", *grafana.Spec.Replicas)
 		// check started or not
 		if *grafana.Spec.Replicas == 0 {
 			logrus.Infof("start grafana")
 			allStarted = false
 			grafanaCopy := grafana.DeepCopy()
-			if replicas, err := strconv.Atoi(grafana.Annotations["storage-network.settings.harvesterhci.io/replica"]); err == nil {
+			if replicas, err := strconv.Atoi(grafana.Annotations[ReplicaStorageNetworkAnnotation]); err == nil {
 				*grafanaCopy.Spec.Replicas = int32(replicas)
 			}
-			delete(grafanaCopy.Annotations, "storage-network.settings.harvesterhci.io/replica")
+			delete(grafanaCopy.Annotations, ReplicaStorageNetworkAnnotation)
 
 			if _, err := h.deployments.Update(grafanaCopy); err != nil {
 				logrus.Warnf("Grafana update error %v", err)
@@ -209,14 +219,14 @@ func (h *Handler) checkPodStatusAndStop() bool {
 	allStopped := true
 
 	// check prometheus cattle-monitoring-system/rancher-monitoring-prometheus replica
-	if prometheus, err := h.prometheusCache.Get("cattle-monitoring-system", "rancher-monitoring-prometheus"); err == nil {
+	if prometheus, err := h.prometheusCache.Get(CattleMonitoringSystemNamespace, RancherMonitoringPrometheus); err == nil {
 		logrus.Infof("prometheus: %v", *prometheus.Spec.Replicas)
 		// check stopped or not
 		if *prometheus.Spec.Replicas != 0 {
 			logrus.Infof("stop prometheus")
 			allStopped = false
 			prometheusCopy := prometheus.DeepCopy()
-			prometheusCopy.Annotations["storage-network.settings.harvesterhci.io/replica"] = strconv.Itoa(int(*prometheus.Spec.Replicas))
+			prometheusCopy.Annotations[ReplicaStorageNetworkAnnotation] = strconv.Itoa(int(*prometheus.Spec.Replicas))
 			*prometheusCopy.Spec.Replicas = 0
 
 			if _, err := h.prometheus.Update(prometheusCopy); err != nil {
@@ -226,14 +236,14 @@ func (h *Handler) checkPodStatusAndStop() bool {
 	}
 
 	// check managedchart fleet-local/rancher-monitoring paused
-	if monitoring, err := h.managedChartCache.Get("fleet-local", "rancher-monitoring"); err == nil {
+	if monitoring, err := h.managedChartCache.Get(FleetLocalNamespace, RancherMonitoring); err == nil {
 		logrus.Infof("Rancher Monitoring: %v", monitoring.Spec.Paused)
 		// check pause or not
 		if !monitoring.Spec.Paused {
 			logrus.Infof("stop rancher monitoring")
 			allStopped = false
 			monitoringCopy := monitoring.DeepCopy()
-			monitoringCopy.Annotations["storage-network.settings.harvesterhci.io/paused"] = "false"
+			monitoringCopy.Annotations[PausedStorageNetworkAnnotation] = "false"
 			monitoringCopy.Spec.Paused = true
 
 			if _, err := h.managedCharts.Update(monitoringCopy); err != nil {
@@ -243,14 +253,14 @@ func (h *Handler) checkPodStatusAndStop() bool {
 	}
 
 	// check deployment cattle-monitoring-system/rancher-monitoring-grafana replica
-	if grafana, err := h.deploymentCache.Get("cattle-monitoring-system", "rancher-monitoring-grafana"); err == nil {
+	if grafana, err := h.deploymentCache.Get(CattleMonitoringSystemNamespace, RancherMonitoringGrafana); err == nil {
 		logrus.Infof("Grafana: %v", *grafana.Spec.Replicas)
 		// check stopped or not
 		if *grafana.Spec.Replicas != 0 {
 			logrus.Infof("stop grafana")
 			allStopped = false
 			grafanaCopy := grafana.DeepCopy()
-			grafanaCopy.Annotations["storage-network.settings.harvesterhci.io/replica"] = strconv.Itoa(int(*grafana.Spec.Replicas))
+			grafanaCopy.Annotations[ReplicaStorageNetworkAnnotation] = strconv.Itoa(int(*grafana.Spec.Replicas))
 			*grafanaCopy.Spec.Replicas = 0
 
 			if _, err := h.deployments.Update(grafanaCopy); err != nil {
