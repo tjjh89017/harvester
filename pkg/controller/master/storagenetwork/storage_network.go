@@ -95,14 +95,23 @@ func (h *Handler) OnStorageNetworkChange(key string, setting *harvesterv1.Settin
 		return nil, nil
 	}
 
-	if setting.Value == h.getLonghornStorageNetwork() {
-		// check if we need to restart monitoring pods
-		if !h.checkPodStatusAndStart() {
-			h.settingsController.EnqueueAfter(setting.Name, 5*time.Second)
-		}
+	if value, err := h.getLonghornStorageNetwork(); err == nil {
+		if setting.Value == value {
+			// check if we need to restart monitoring pods
+			if ok, err := h.checkPodStatusAndStart(); !ok {
+				if err != nil {
+					// only log error but not return to controller
+					logrus.Warnf("check pod status start error: %v", err)
+				}
+				h.settingsController.EnqueueAfter(setting.Name, 5*time.Second)
+			}
 
-		// finish
-		return nil, nil
+			// finish
+			return nil, nil
+		}
+	} else {
+		logrus.Warnf("get Longhorn settings error: %v", err)
+		return nil, err
 	}
 
 	logrus.Infof("storage network change:%s", setting.Value)
@@ -110,7 +119,11 @@ func (h *Handler) OnStorageNetworkChange(key string, setting *harvesterv1.Settin
 	// if replica eq 0, skip
 	// save replica to annotation
 	// set replica to 0
-	if !h.checkPodStatusAndStop() {
+	if ok, err := h.checkPodStatusAndStop(); !ok {
+		if err != nil {
+			// only log err but not return to controller
+			logrus.Warnf("check pod status stop error: %v", err)
+		}
 		logrus.Infof("Requeue to check pod status again")
 		h.settingsController.EnqueueAfter(setting.Name, 5*time.Second)
 		return nil, nil
@@ -119,7 +132,11 @@ func (h *Handler) OnStorageNetworkChange(key string, setting *harvesterv1.Settin
 	logrus.Infof("all pods are stopped")
 
 	// check volume detach before put LH settings
-	if !h.checkLonghornVolumeDetach() {
+	if ok, err := h.checkLonghornVolumeDetach(); !ok {
+		if err != nil {
+			// log error only but not return error to controller
+			logrus.Warnf("check Longhorn volume error: %v", err)
+		}
 		logrus.Infof("still has attached volume")
 		h.settingsController.EnqueueAfter(setting.Name, 5*time.Second)
 		return nil, nil
@@ -137,23 +154,23 @@ func (h *Handler) OnStorageNetworkChange(key string, setting *harvesterv1.Settin
 }
 
 // true: all detach
-func (h *Handler) checkLonghornVolumeDetach() bool {
+func (h *Handler) checkLonghornVolumeDetach() (bool, error) {
 	if volumes, err := h.longhornVolumeCache.List(util.LonghornSystemNamespaceName, labels.Everything()); err == nil {
 		for _, volume := range volumes {
 			logrus.Infof("volume state: %v", volume.Status.State)
 			if volume.Status.State != "detached" {
-				return false
+				return false, nil
 			}
 		}
-		return true
+		return true, nil
 	} else {
 		logrus.Warnf("volume error %v", err)
+		return false, err
 	}
-	return true
 }
 
 // check Pod status, if all pods are start, return true
-func (h *Handler) checkPodStatusAndStart() bool {
+func (h *Handler) checkPodStatusAndStart() (bool, error) {
 	allStarted := true
 
 	// check prometheus cattle-monitoring-system/rancher-monitoring-prometheus replica
@@ -173,6 +190,8 @@ func (h *Handler) checkPodStatusAndStart() bool {
 				logrus.Warnf("prometheus update error %v", err)
 			}
 		}
+	} else {
+		return false, err
 	}
 
 	// check managedchart fleet-local/rancher-monitoring paused
@@ -190,6 +209,8 @@ func (h *Handler) checkPodStatusAndStart() bool {
 				logrus.Warnf("rancher monitoring error %v", err)
 			}
 		}
+	} else {
+		return false, err
 	}
 
 	// check deployment cattle-monitoring-system/rancher-monitoring-grafana replica
@@ -209,13 +230,15 @@ func (h *Handler) checkPodStatusAndStart() bool {
 				logrus.Warnf("Grafana update error %v", err)
 			}
 		}
+	} else {
+		return false, err
 	}
 
-	return allStarted
+	return allStarted, nil
 }
 
 // check Pod status, if all pods are stopped, return true
-func (h *Handler) checkPodStatusAndStop() bool {
+func (h *Handler) checkPodStatusAndStop() (bool, error) {
 	allStopped := true
 
 	// check prometheus cattle-monitoring-system/rancher-monitoring-prometheus replica
@@ -233,6 +256,8 @@ func (h *Handler) checkPodStatusAndStop() bool {
 				logrus.Warnf("prometheus update error %v", err)
 			}
 		}
+	} else {
+		return false, err
 	}
 
 	// check managedchart fleet-local/rancher-monitoring paused
@@ -250,6 +275,8 @@ func (h *Handler) checkPodStatusAndStop() bool {
 				logrus.Warnf("rancher monitoring error %v", err)
 			}
 		}
+	} else {
+		return false, err
 	}
 
 	// check deployment cattle-monitoring-system/rancher-monitoring-grafana replica
@@ -267,17 +294,22 @@ func (h *Handler) checkPodStatusAndStop() bool {
 				logrus.Warnf("Grafana update error %v", err)
 			}
 		}
+	} else {
+		return false, err
 	}
 
-	return allStopped
+	return allStopped, nil
 }
 
-func (h *Handler) getLonghornStorageNetwork() string {
+func (h *Handler) getLonghornStorageNetwork() (string, error) {
 	storage, err := h.longhornSettingCache.Get(util.LonghornSystemNamespaceName, longhornStorageNetworkName)
 	if err != nil {
-		return ""
+		if apierrors.IsNotFound(err) {
+			return "", nil
+		}
+		return "", err
 	}
-	return storage.Value
+	return storage.Value, nil
 }
 
 func (h *Handler) updateLonghornStorageNetwork(storageNetwork string) error {
