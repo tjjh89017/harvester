@@ -28,7 +28,7 @@ import (
 )
 
 const (
-	ControllerName                  = "harvester-backup-target-controller"
+	ControllerName                  = "harvester-storage-network-controller"
 	StorageNetworkAnnotation        = "storage-network.settings.harvesterhci.io"
 	ReplicaStorageNetworkAnnotation = StorageNetworkAnnotation + "/replica"
 	PausedStorageNetworkAnnotation  = StorageNetworkAnnotation + "/paused"
