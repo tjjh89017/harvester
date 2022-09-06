@@ -10,7 +10,7 @@ import (
 	storagev1beta1 "github.com/kubernetes-csi/external-snapshotter/v2/pkg/apis/volumesnapshot/v1beta1"
 	longhornv1 "github.com/longhorn/longhorn-manager/k8s/pkg/apis/longhorn/v1beta1"
 	monitoring "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring"
-	prometheusv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
+	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	upgradev1 "github.com/rancher/system-upgrade-controller/pkg/apis/upgrade.cattle.io/v1"
 	controllergen "github.com/rancher/wrangler/pkg/controller-gen"
 	"github.com/rancher/wrangler/pkg/controller-gen/args"
@@ -114,7 +114,8 @@ func main() {
 			},
 			monitoring.GroupName: {
 				Types: []interface{}{
-					prometheusv1.Prometheus{},
+					monitoringv1.Prometheus{},
+					monitoringv1.Alertmanager{},
 				},
 				GenerateClients: true,
 			},

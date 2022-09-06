@@ -46,6 +46,7 @@ const (
 	// Rancher monitoring
 	CattleMonitoringSystemNamespace = "cattle-monitoring-system"
 	RancherMonitoringPrometheus     = "rancher-monitoring-prometheus"
+	RancherMonitoringAlertmanager   = "rancher-monitoring-alertmanager"
 	FleetLocalNamespace             = "fleet-local"
 	RancherMonitoring               = "rancher-monitoring"
 	RancherMonitoringGrafana        = "rancher-monitoring-grafana"
@@ -59,6 +60,8 @@ type Handler struct {
 	longhornVolumeCache  ctllonghornv1.VolumeCache
 	prometheus           ctlmonitoringv1.PrometheusClient
 	prometheusCache      ctlmonitoringv1.PrometheusCache
+	alertmanager         ctlmonitoringv1.AlertmanagerClient
+	alertmanagerCache    ctlmonitoringv1.AlertmanagerCache
 	deployments          v1.DeploymentClient
 	deploymentCache      v1.DeploymentCache
 	managedCharts        ctlmgmtv3.ManagedChartClient
@@ -74,6 +77,7 @@ func Register(ctx context.Context, management *config.Management, opts config.Op
 	longhornSettings := management.LonghornFactory.Longhorn().V1beta1().Setting()
 	longhornVolumes := management.LonghornFactory.Longhorn().V1beta1().Volume()
 	prometheus := management.MonitoringFactory.Monitoring().V1().Prometheus()
+	alertmanager := management.MonitoringFactory.Monitoring().V1().Alertmanager()
 	deployments := management.AppsFactory.Apps().V1().Deployment()
 	managedCharts := management.RancherManagementFactory.Management().V3().ManagedChart()
 
@@ -85,6 +89,8 @@ func Register(ctx context.Context, management *config.Management, opts config.Op
 		longhornVolumeCache:  longhornVolumes.Cache(),
 		prometheus:           prometheus,
 		prometheusCache:      prometheus.Cache(),
+		alertmanager:         alertmanager,
+		alertmanagerCache:    alertmanager.Cache(),
 		settings:             settings,
 		settingsCache:        settings.Cache(),
 		settingsController:   settings,
@@ -235,6 +241,27 @@ func (h *Handler) checkPodStatusAndStart() (bool, error) {
 		return false, err
 	}
 
+	// check alertmanager cattle-monitoring-system/rancher-monitoring-alertmanager replica
+	if alertmanager, err := h.alertmanagerCache.Get(CattleMonitoringSystemNamespace, RancherMonitoringAlertmanager); err == nil {
+		logrus.Infof("alertmanager: %v", *alertmanager.Spec.Replicas)
+		// check started or not
+		if *alertmanager.Spec.Replicas == 0 {
+			logrus.Infof("start alertmanager")
+			allStarted = false
+			alertmanagerCopy := alertmanager.DeepCopy()
+			if replicas, err := strconv.Atoi(alertmanager.Annotations[ReplicaStorageNetworkAnnotation]); err == nil {
+				*alertmanagerCopy.Spec.Replicas = int32(replicas)
+			}
+			delete(alertmanagerCopy.Annotations, ReplicaStorageNetworkAnnotation)
+
+			if _, err := h.alertmanager.Update(alertmanagerCopy); err != nil {
+				logrus.Warnf("alertmanager update error %v", err)
+			}
+		}
+	} else {
+		return false, err
+	}
+
 	// check managedchart fleet-local/rancher-monitoring paused
 	if monitoring, err := h.managedChartCache.Get(FleetLocalNamespace, RancherMonitoring); err == nil {
 		logrus.Infof("Rancher Monitoring: %v", monitoring.Spec.Paused)
@@ -295,6 +322,25 @@ func (h *Handler) checkPodStatusAndStop() (bool, error) {
 
 			if _, err := h.prometheus.Update(prometheusCopy); err != nil {
 				logrus.Warnf("prometheus update error %v", err)
+			}
+		}
+	} else {
+		return false, err
+	}
+
+	// check alertmanager cattle-monitoring-system/rancher-monitoring-alertmanager replica
+	if alertmanager, err := h.alertmanagerCache.Get(CattleMonitoringSystemNamespace, RancherMonitoringAlertmanager); err == nil {
+		logrus.Infof("alertmanager: %v", *alertmanager.Spec.Replicas)
+		// check stopped or not
+		if *alertmanager.Spec.Replicas != 0 {
+			logrus.Infof("stop alertmanager")
+			allStopped = false
+			alertmanagerCopy := alertmanager.DeepCopy()
+			alertmanagerCopy.Annotations[ReplicaStorageNetworkAnnotation] = strconv.Itoa(int(*alertmanager.Spec.Replicas))
+			*alertmanagerCopy.Spec.Replicas = 0
+
+			if _, err := h.alertmanager.Update(alertmanagerCopy); err != nil {
+				logrus.Warnf("alertmanager update error %v", err)
 			}
 		}
 	} else {
