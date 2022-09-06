@@ -33,6 +33,14 @@ const (
 	ReplicaStorageNetworkAnnotation = StorageNetworkAnnotation + "/replica"
 	PausedStorageNetworkAnnotation  = StorageNetworkAnnotation + "/paused"
 
+	// status
+	ReasonInProgress         = "In Progress"
+	ReasonCompleted          = "Completed"
+	MsgRestartPod            = "Restarting Pods"
+	MsgStopPod               = "Stoping Pods"
+	MsgWaitForVolumes        = "Waiting for all volumes detached"
+	MsgUpdateLonghornSetting = "Update Longhorn setting"
+
 	longhornStorageNetworkName = "storage-network"
 
 	// Rancher monitoring
@@ -56,6 +64,7 @@ type Handler struct {
 	managedCharts        ctlmgmtv3.ManagedChartClient
 	managedChartCache    ctlmgmtv3.ManagedChartCache
 	settings             ctlharvesterv1.SettingClient
+	settingsCache        ctlharvesterv1.SettingCache
 	settingsController   ctlharvesterv1.SettingController
 }
 
@@ -77,6 +86,7 @@ func Register(ctx context.Context, management *config.Management, opts config.Op
 		prometheus:           prometheus,
 		prometheusCache:      prometheus.Cache(),
 		settings:             settings,
+		settingsCache:        settings.Cache(),
 		settingsController:   settings,
 		deployments:          deployments,
 		deploymentCache:      deployments.Cache(),
@@ -88,11 +98,26 @@ func Register(ctx context.Context, management *config.Management, opts config.Op
 	return nil
 }
 
+func (h *Handler) setConfiguredCondition(setting *harvesterv1.Setting, finish bool, reason string, msg string) (*harvesterv1.Setting, error) {
+
+	settingCopy := setting.DeepCopy()
+	if finish {
+		harvesterv1.SettingConfigured.True(settingCopy)
+	} else {
+		harvesterv1.SettingConfigured.False(settingCopy)
+	}
+
+	harvesterv1.SettingConfigured.Reason(settingCopy, reason)
+	harvesterv1.SettingConfigured.Message(settingCopy, msg)
+
+	return h.settings.Update(settingCopy)
+}
+
 // webhook needs check if VMs are off
 // webhook needs check if nad is existing
 func (h *Handler) OnStorageNetworkChange(key string, setting *harvesterv1.Setting) (*harvesterv1.Setting, error) {
 	if setting == nil || setting.DeletionTimestamp != nil || setting.Name != settings.StorageNetworkName {
-		return nil, nil
+		return setting, nil
 	}
 
 	if value, err := h.getLonghornStorageNetwork(); err == nil {
@@ -103,10 +128,17 @@ func (h *Handler) OnStorageNetworkChange(key string, setting *harvesterv1.Settin
 					// only log error but not return to controller
 					logrus.Warnf("check pod status start error: %v", err)
 				}
+				if _, err := h.setConfiguredCondition(setting, false, ReasonInProgress, MsgRestartPod); err != nil {
+					logrus.Warnf("update status error %v", err)
+				}
 				h.settingsController.EnqueueAfter(setting.Name, 5*time.Second)
+				return nil, nil
 			}
 
 			// finish
+			if _, err := h.setConfiguredCondition(setting, true, ReasonCompleted, ""); err != nil {
+				logrus.Warnf("update status error %v", err)
+			}
 			return nil, nil
 		}
 	} else {
@@ -125,6 +157,9 @@ func (h *Handler) OnStorageNetworkChange(key string, setting *harvesterv1.Settin
 			logrus.Warnf("check pod status stop error: %v", err)
 		}
 		logrus.Infof("Requeue to check pod status again")
+		if _, err := h.setConfiguredCondition(setting, false, ReasonInProgress, MsgStopPod); err != nil {
+			logrus.Warnf("update status error %v", err)
+		}
 		h.settingsController.EnqueueAfter(setting.Name, 5*time.Second)
 		return nil, nil
 	}
@@ -138,6 +173,9 @@ func (h *Handler) OnStorageNetworkChange(key string, setting *harvesterv1.Settin
 			logrus.Warnf("check Longhorn volume error: %v", err)
 		}
 		logrus.Infof("still has attached volume")
+		if _, err := h.setConfiguredCondition(setting, false, ReasonInProgress, MsgWaitForVolumes); err != nil {
+			logrus.Warnf("update status error %v", err)
+		}
 		h.settingsController.EnqueueAfter(setting.Name, 5*time.Second)
 		return nil, nil
 	}
@@ -147,6 +185,9 @@ func (h *Handler) OnStorageNetworkChange(key string, setting *harvesterv1.Settin
 	// push LH setting
 	if err := h.updateLonghornStorageNetwork(setting.Value); err != nil {
 		logrus.Warnf("Update Longhorn setting error %v", err)
+	}
+	if _, err := h.setConfiguredCondition(setting, false, ReasonInProgress, MsgUpdateLonghornSetting); err != nil {
+		logrus.Warnf("update status error %v", err)
 	}
 	h.settingsController.EnqueueAfter(setting.Name, 5*time.Second)
 
