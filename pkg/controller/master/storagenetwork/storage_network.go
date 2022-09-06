@@ -262,25 +262,6 @@ func (h *Handler) checkPodStatusAndStart() (bool, error) {
 		return false, err
 	}
 
-	// check managedchart fleet-local/rancher-monitoring paused
-	if monitoring, err := h.managedChartCache.Get(FleetLocalNamespace, RancherMonitoring); err == nil {
-		logrus.Infof("Rancher Monitoring: %v", monitoring.Spec.Paused)
-		// check pause or not
-		if monitoring.Spec.Paused {
-			logrus.Infof("start rancher monitoring")
-			allStarted = false
-			monitoringCopy := monitoring.DeepCopy()
-			monitoringCopy.Spec.Paused = false
-			delete(monitoringCopy.Annotations, PausedStorageNetworkAnnotation)
-
-			if _, err := h.managedCharts.Update(monitoringCopy); err != nil {
-				logrus.Warnf("rancher monitoring error %v", err)
-			}
-		}
-	} else {
-		return false, err
-	}
-
 	// check deployment cattle-monitoring-system/rancher-monitoring-grafana replica
 	if grafana, err := h.deploymentCache.Get(CattleMonitoringSystemNamespace, RancherMonitoringGrafana); err == nil {
 		logrus.Infof("Grafana: %v", *grafana.Spec.Replicas)
@@ -302,12 +283,50 @@ func (h *Handler) checkPodStatusAndStart() (bool, error) {
 		return false, err
 	}
 
+	// check managedchart fleet-local/rancher-monitoring paused
+	if monitoring, err := h.managedChartCache.Get(FleetLocalNamespace, RancherMonitoring); err == nil {
+		logrus.Infof("Rancher Monitoring: %v", monitoring.Spec.Paused)
+		// check pause or not
+		if monitoring.Spec.Paused {
+			logrus.Infof("start rancher monitoring")
+			allStarted = false
+			monitoringCopy := monitoring.DeepCopy()
+			monitoringCopy.Spec.Paused = false
+			delete(monitoringCopy.Annotations, PausedStorageNetworkAnnotation)
+
+			if _, err := h.managedCharts.Update(monitoringCopy); err != nil {
+				logrus.Warnf("rancher monitoring error %v", err)
+			}
+		}
+	} else {
+		return false, err
+	}
+
 	return allStarted, nil
 }
 
 // check Pod status, if all pods are stopped, return true
 func (h *Handler) checkPodStatusAndStop() (bool, error) {
 	allStopped := true
+
+	// check managedchart fleet-local/rancher-monitoring paused
+	if monitoring, err := h.managedChartCache.Get(FleetLocalNamespace, RancherMonitoring); err == nil {
+		logrus.Infof("Rancher Monitoring: %v", monitoring.Spec.Paused)
+		// check pause or not
+		if !monitoring.Spec.Paused {
+			logrus.Infof("stop rancher monitoring")
+			allStopped = false
+			monitoringCopy := monitoring.DeepCopy()
+			monitoringCopy.Annotations[PausedStorageNetworkAnnotation] = "false"
+			monitoringCopy.Spec.Paused = true
+
+			if _, err := h.managedCharts.Update(monitoringCopy); err != nil {
+				logrus.Warnf("rancher monitoring error %v", err)
+			}
+		}
+	} else {
+		return false, err
+	}
 
 	// check prometheus cattle-monitoring-system/rancher-monitoring-prometheus replica
 	if prometheus, err := h.prometheusCache.Get(CattleMonitoringSystemNamespace, RancherMonitoringPrometheus); err == nil {
@@ -341,25 +360,6 @@ func (h *Handler) checkPodStatusAndStop() (bool, error) {
 
 			if _, err := h.alertmanager.Update(alertmanagerCopy); err != nil {
 				logrus.Warnf("alertmanager update error %v", err)
-			}
-		}
-	} else {
-		return false, err
-	}
-
-	// check managedchart fleet-local/rancher-monitoring paused
-	if monitoring, err := h.managedChartCache.Get(FleetLocalNamespace, RancherMonitoring); err == nil {
-		logrus.Infof("Rancher Monitoring: %v", monitoring.Spec.Paused)
-		// check pause or not
-		if !monitoring.Spec.Paused {
-			logrus.Infof("stop rancher monitoring")
-			allStopped = false
-			monitoringCopy := monitoring.DeepCopy()
-			monitoringCopy.Annotations[PausedStorageNetworkAnnotation] = "false"
-			monitoringCopy.Spec.Paused = true
-
-			if _, err := h.managedCharts.Update(monitoringCopy); err != nil {
-				logrus.Warnf("rancher monitoring error %v", err)
 			}
 		}
 	} else {
