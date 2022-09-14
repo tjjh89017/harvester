@@ -7,11 +7,8 @@ import (
 	"time"
 
 	longhornv1 "github.com/longhorn/longhorn-manager/k8s/pkg/apis/longhorn/v1beta1"
-	//ctlcorev1 "github.com/rancher/wrangler/pkg/generated/controllers/core/v1"
-	"github.com/sirupsen/logrus"
-	//corev1 "k8s.io/api/core/v1"
-	//"github.com/rancher/wrangler/pkg/condition"
 	v1 "github.com/rancher/wrangler/pkg/generated/controllers/apps/v1"
+	"github.com/sirupsen/logrus"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -19,7 +16,6 @@ import (
 	harvesterv1 "github.com/harvester/harvester/pkg/apis/harvesterhci.io/v1beta1"
 	"github.com/harvester/harvester/pkg/config"
 	ctlharvesterv1 "github.com/harvester/harvester/pkg/generated/controllers/harvesterhci.io/v1beta1"
-	//ctlkubevirtv1 "github.com/harvester/harvester/pkg/generated/controllers/kubevirt.io/v1"
 	ctllonghornv1 "github.com/harvester/harvester/pkg/generated/controllers/longhorn.io/v1beta1"
 	ctlmonitoringv1 "github.com/harvester/harvester/pkg/generated/controllers/monitoring.coreos.com/v1"
 	"github.com/harvester/harvester/pkg/settings"
@@ -126,12 +122,15 @@ func (h *Handler) OnStorageNetworkChange(key string, setting *harvesterv1.Settin
 		return setting, nil
 	}
 
-	if ok, _ := h.checkLonghornSetting(setting); ok {
+	if ok, err := h.checkLonghornSetting(setting); ok {
 		// finish
 		return nil, nil
+	} else {
+		// reconcile
+		return nil, err
 	}
 
-	logrus.Infof("storage network change:%s", setting.Value)
+	logrus.Infof("storage network change: %s", setting.Value)
 
 	// if replica eq 0, skip
 	// save replica to annotation
