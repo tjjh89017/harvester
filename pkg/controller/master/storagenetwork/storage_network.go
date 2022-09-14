@@ -135,11 +135,7 @@ func (h *Handler) OnStorageNetworkChange(key string, setting *harvesterv1.Settin
 	// if replica eq 0, skip
 	// save replica to annotation
 	// set replica to 0
-	if ok, err := h.checkPodStatusAndStop(); !ok {
-		if err != nil {
-			// only log err but not return to controller
-			logrus.Warnf("check pod status stop error: %v", err)
-		}
+	if !h.checkPodStatusAndStop() {
 		logrus.Infof("Requeue to check pod status again")
 		if _, err := h.setConfiguredCondition(setting, false, ReasonInProgress, MsgStopPod); err != nil {
 			logrus.Warnf("update status error %v", err)
@@ -188,11 +184,7 @@ func (h *Handler) checkLonghornSetting(setting *harvesterv1.Setting) (bool, erro
 
 	if setting.Value == value {
 		// check if we need to restart monitoring pods
-		if ok, err := h.checkPodStatusAndStart(); !ok {
-			if err != nil {
-				// only log error but not return to controller
-				logrus.Warnf("check pod status start error: %v", err)
-			}
+		if !h.checkPodStatusAndStart() {
 			if _, err := h.setConfiguredCondition(setting, false, ReasonInProgress, MsgRestartPod); err != nil {
 				logrus.Warnf("update status error %v", err)
 			}
@@ -226,11 +218,12 @@ func (h *Handler) checkLonghornVolumeDetach() (bool, error) {
 	return true, nil
 }
 
-func (h *Handler) checkPrometheusStatusAndStart() (bool, error) {
+func (h *Handler) checkPrometheusStatusAndStart() bool {
 	// check prometheus cattle-monitoring-system/rancher-monitoring-prometheus replica
 	prometheus, err := h.prometheusCache.Get(CattleMonitoringSystemNamespace, RancherMonitoringPrometheus)
 	if err != nil {
-		return false, err
+		logrus.Warnf("prometheus get error %v", err)
+		return false
 	}
 
 	logrus.Infof("prometheus: %v", *prometheus.Spec.Replicas)
@@ -245,18 +238,20 @@ func (h *Handler) checkPrometheusStatusAndStart() (bool, error) {
 
 		if _, err := h.prometheus.Update(prometheusCopy); err != nil {
 			logrus.Warnf("prometheus update error %v", err)
-			return false, err
+			return false
 		}
+		return false
 	}
 
-	return true, nil
+	return true
 }
 
-func (h *Handler) checkAltermanagerStatusAndStart() (bool, error) {
+func (h *Handler) checkAltermanagerStatusAndStart() bool {
 	// check alertmanager cattle-monitoring-system/rancher-monitoring-alertmanager replica
 	alertmanager, err := h.alertmanagerCache.Get(CattleMonitoringSystemNamespace, RancherMonitoringAlertmanager)
 	if err != nil {
-		return false, err
+		logrus.Warnf("alertmanager get error %v", err)
+		return false
 	}
 
 	logrus.Infof("alertmanager: %v", *alertmanager.Spec.Replicas)
@@ -271,18 +266,20 @@ func (h *Handler) checkAltermanagerStatusAndStart() (bool, error) {
 
 		if _, err := h.alertmanager.Update(alertmanagerCopy); err != nil {
 			logrus.Warnf("alertmanager update error %v", err)
-			return false, err
+			return false
 		}
+		return false
 	}
 
-	return true, nil
+	return true
 }
 
-func (h *Handler) checkGrafanaStatusAndStart() (bool, error) {
+func (h *Handler) checkGrafanaStatusAndStart() bool {
 	// check deployment cattle-monitoring-system/rancher-monitoring-grafana replica
 	grafana, err := h.deploymentCache.Get(CattleMonitoringSystemNamespace, RancherMonitoringGrafana)
 	if err != nil {
-		return false, err
+		logrus.Warnf("grafana get error %v", err)
+		return false
 	}
 
 	logrus.Infof("Grafana: %v", *grafana.Spec.Replicas)
@@ -297,18 +294,20 @@ func (h *Handler) checkGrafanaStatusAndStart() (bool, error) {
 
 		if _, err := h.deployments.Update(grafanaCopy); err != nil {
 			logrus.Warnf("Grafana update error %v", err)
-			return false, err
+			return false
 		}
+		return false
 	}
 
-	return true, nil
+	return true
 }
 
-func (h *Handler) checkRancherMonitoringStatusAndStart() (bool, error) {
+func (h *Handler) checkRancherMonitoringStatusAndStart() bool {
 	// check managedchart fleet-local/rancher-monitoring paused
 	monitoring, err := h.managedChartCache.Get(FleetLocalNamespace, RancherMonitoring)
 	if err != nil {
-		return false, err
+		logrus.Warnf("rancher monitoring get error %v", err)
+		return false
 	}
 
 	logrus.Infof("Rancher Monitoring: %v", monitoring.Spec.Paused)
@@ -321,41 +320,43 @@ func (h *Handler) checkRancherMonitoringStatusAndStart() (bool, error) {
 
 		if _, err := h.managedCharts.Update(monitoringCopy); err != nil {
 			logrus.Warnf("rancher monitoring error %v", err)
-			return false, err
+			return false
 		}
+		return false
 	}
 
-	return true, nil
+	return true
 }
 
 // check Pod status, if all pods are start, return true
-func (h *Handler) checkPodStatusAndStart() (bool, error) {
+func (h *Handler) checkPodStatusAndStart() bool {
 	allStarted := true
 
-	if ok, _ := h.checkPrometheusStatusAndStart(); !ok {
+	if !h.checkPrometheusStatusAndStart() {
 		allStarted = false
 	}
 
-	if ok, _ := h.checkAltermanagerStatusAndStart(); !ok {
+	if !h.checkAltermanagerStatusAndStart() {
 		allStarted = false
 	}
 
-	if ok, _ := h.checkGrafanaStatusAndStart(); !ok {
+	if !h.checkGrafanaStatusAndStart() {
 		allStarted = false
 	}
 
-	if ok, _ := h.checkRancherMonitoringStatusAndStart(); !ok {
+	if !h.checkRancherMonitoringStatusAndStart() {
 		allStarted = false
 	}
 
-	return allStarted, nil
+	return allStarted
 }
 
-func (h *Handler) checkRancherMonitoringStatusAndStop() (bool, error) {
+func (h *Handler) checkRancherMonitoringStatusAndStop() bool {
 	// check managedchart fleet-local/rancher-monitoring paused
 	monitoring, err := h.managedChartCache.Get(FleetLocalNamespace, RancherMonitoring)
 	if err != nil {
-		return false, err
+		logrus.Warnf("rancher monitoring get error %v", err)
+		return false
 	}
 
 	logrus.Infof("Rancher Monitoring: %v", monitoring.Spec.Paused)
@@ -368,18 +369,20 @@ func (h *Handler) checkRancherMonitoringStatusAndStop() (bool, error) {
 
 		if _, err := h.managedCharts.Update(monitoringCopy); err != nil {
 			logrus.Warnf("rancher monitoring error %v", err)
-			return false, err
+			return false
 		}
+		return false
 	}
 
-	return true, nil
+	return true
 }
 
-func (h *Handler) checkPrometheusStatusAndStop() (bool, error) {
+func (h *Handler) checkPrometheusStatusAndStop() bool {
 	// check prometheus cattle-monitoring-system/rancher-monitoring-prometheus replica
 	prometheus, err := h.prometheusCache.Get(CattleMonitoringSystemNamespace, RancherMonitoringPrometheus)
 	if err != nil {
-		return false, err
+		logrus.Warnf("prometheus get error %v", err)
+		return false
 	}
 	logrus.Infof("prometheus: %v", *prometheus.Spec.Replicas)
 	// check stopped or not
@@ -391,18 +394,20 @@ func (h *Handler) checkPrometheusStatusAndStop() (bool, error) {
 
 		if _, err := h.prometheus.Update(prometheusCopy); err != nil {
 			logrus.Warnf("prometheus update error %v", err)
-			return false, err
+			return false
 		}
+		return false
 	}
 
-	return true, nil
+	return true
 }
 
-func (h *Handler) checkAltermanagerStatusAndStop() (bool, error) {
+func (h *Handler) checkAltermanagerStatusAndStop() bool {
 	// check alertmanager cattle-monitoring-system/rancher-monitoring-alertmanager replica
 	alertmanager, err := h.alertmanagerCache.Get(CattleMonitoringSystemNamespace, RancherMonitoringAlertmanager)
 	if err != nil {
-		return false, err
+		logrus.Warnf("alertmanager get error %v", err)
+		return false
 	}
 
 	logrus.Infof("alertmanager: %v", *alertmanager.Spec.Replicas)
@@ -415,18 +420,20 @@ func (h *Handler) checkAltermanagerStatusAndStop() (bool, error) {
 
 		if _, err := h.alertmanager.Update(alertmanagerCopy); err != nil {
 			logrus.Warnf("alertmanager update error %v", err)
-			return false, err
+			return false
 		}
+		return false
 	}
 
-	return true, nil
+	return true
 }
 
-func (h *Handler) checkGrafanaStatusAndStop() (bool, error) {
+func (h *Handler) checkGrafanaStatusAndStop() bool {
 	// check deployment cattle-monitoring-system/rancher-monitoring-grafana replica
 	grafana, err := h.deploymentCache.Get(CattleMonitoringSystemNamespace, RancherMonitoringGrafana)
 	if err != nil {
-		return false, err
+		logrus.Warnf("grafana get error %v", err)
+		return false
 	}
 
 	logrus.Infof("Grafana: %v", *grafana.Spec.Replicas)
@@ -439,34 +446,35 @@ func (h *Handler) checkGrafanaStatusAndStop() (bool, error) {
 
 		if _, err := h.deployments.Update(grafanaCopy); err != nil {
 			logrus.Warnf("Grafana update error %v", err)
-			return false, err
+			return false
 		}
+		return false
 	}
 
-	return true, nil
+	return true
 }
 
 // check Pod status, if all pods are stopped, return true
-func (h *Handler) checkPodStatusAndStop() (bool, error) {
+func (h *Handler) checkPodStatusAndStop() bool {
 	allStopped := true
 
-	if ok, _ := h.checkRancherMonitoringStatusAndStop(); !ok {
+	if !h.checkRancherMonitoringStatusAndStop() {
 		allStopped = false
 	}
 
-	if ok, _ := h.checkPrometheusStatusAndStop(); !ok {
+	if !h.checkPrometheusStatusAndStop() {
 		allStopped = false
 	}
 
-	if ok, _ := h.checkAltermanagerStatusAndStop(); !ok {
+	if !h.checkAltermanagerStatusAndStop() {
 		allStopped = false
 	}
 
-	if ok, _ := h.checkGrafanaStatusAndStop(); !ok {
+	if !h.checkGrafanaStatusAndStop() {
 		allStopped = false
 	}
 
-	return allStopped, nil
+	return allStopped
 }
 
 func (h *Handler) getLonghornStorageNetwork() (string, error) {
