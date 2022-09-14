@@ -7,6 +7,7 @@ import (
 	"time"
 
 	longhornv1 "github.com/longhorn/longhorn-manager/k8s/pkg/apis/longhorn/v1beta1"
+	ctlmgmtv3 "github.com/rancher/rancher/pkg/generated/controllers/management.cattle.io/v3"
 	v1 "github.com/rancher/wrangler/pkg/generated/controllers/apps/v1"
 	"github.com/sirupsen/logrus"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -20,7 +21,6 @@ import (
 	ctlmonitoringv1 "github.com/harvester/harvester/pkg/generated/controllers/monitoring.coreos.com/v1"
 	"github.com/harvester/harvester/pkg/settings"
 	"github.com/harvester/harvester/pkg/util"
-	ctlmgmtv3 "github.com/rancher/rancher/pkg/generated/controllers/management.cattle.io/v3"
 )
 
 const (
@@ -112,7 +112,15 @@ func (h *Handler) setConfiguredCondition(setting *harvesterv1.Setting, finish bo
 	harvesterv1.SettingConfigured.Reason(settingCopy, reason)
 	harvesterv1.SettingConfigured.Message(settingCopy, msg)
 
-	return h.settings.Update(settingCopy)
+	if !reflect.DeepEqual(settingCopy, setting) {
+		s, err := h.settings.Update(settingCopy)
+		if err != nil {
+			return nil, err
+		}
+		return s, nil
+	}
+
+	return setting, nil
 }
 
 // webhook needs check if VMs are off
@@ -122,12 +130,9 @@ func (h *Handler) OnStorageNetworkChange(key string, setting *harvesterv1.Settin
 		return setting, nil
 	}
 
-	if ok, err := h.checkLonghornSetting(setting); ok {
+	if h.checkLonghornSetting(setting) {
 		// finish
 		return nil, nil
-	} else {
-		// reconcile
-		return nil, err
 	}
 
 	logrus.Infof("storage network change: %s", setting.Value)
@@ -175,11 +180,11 @@ func (h *Handler) OnStorageNetworkChange(key string, setting *harvesterv1.Settin
 }
 
 // return true as finished
-func (h *Handler) checkLonghornSetting(setting *harvesterv1.Setting) (bool, error) {
+func (h *Handler) checkLonghornSetting(setting *harvesterv1.Setting) bool {
 	value, err := h.getLonghornStorageNetwork()
 	if err != nil {
 		logrus.Warnf("get Longhorn settings error: %v", err)
-		return false, err
+		return false
 	}
 
 	if setting.Value == value {
@@ -189,16 +194,16 @@ func (h *Handler) checkLonghornSetting(setting *harvesterv1.Setting) (bool, erro
 				logrus.Warnf("update status error %v", err)
 			}
 			h.settingsController.EnqueueAfter(setting.Name, 5*time.Second)
-			return true, nil
+			return true
 		}
 
 		// finish
 		if _, err := h.setConfiguredCondition(setting, true, ReasonCompleted, ""); err != nil {
 			logrus.Warnf("update status error %v", err)
 		}
-		return true, nil
+		return true
 	}
-	return false, nil
+	return false
 }
 
 // true: all detach
@@ -231,6 +236,7 @@ func (h *Handler) checkPrometheusStatusAndStart() bool {
 	if *prometheus.Spec.Replicas == 0 {
 		logrus.Infof("start prometheus")
 		prometheusCopy := prometheus.DeepCopy()
+		*prometheusCopy.Spec.Replicas = 1
 		if replicas, err := strconv.Atoi(prometheus.Annotations[ReplicaStorageNetworkAnnotation]); err == nil {
 			*prometheusCopy.Spec.Replicas = int32(replicas)
 		}
@@ -259,6 +265,7 @@ func (h *Handler) checkAltermanagerStatusAndStart() bool {
 	if *alertmanager.Spec.Replicas == 0 {
 		logrus.Infof("start alertmanager")
 		alertmanagerCopy := alertmanager.DeepCopy()
+		*alertmanagerCopy.Spec.Replicas = 1
 		if replicas, err := strconv.Atoi(alertmanager.Annotations[ReplicaStorageNetworkAnnotation]); err == nil {
 			*alertmanagerCopy.Spec.Replicas = int32(replicas)
 		}
@@ -287,6 +294,7 @@ func (h *Handler) checkGrafanaStatusAndStart() bool {
 	if *grafana.Spec.Replicas == 0 {
 		logrus.Infof("start grafana")
 		grafanaCopy := grafana.DeepCopy()
+		*grafanaCopy.Spec.Replicas = 1
 		if replicas, err := strconv.Atoi(grafana.Annotations[ReplicaStorageNetworkAnnotation]); err == nil {
 			*grafanaCopy.Spec.Replicas = int32(replicas)
 		}
