@@ -180,70 +180,73 @@ func (h *Handler) OnStorageNetworkChange(key string, setting *harvesterv1.Settin
 
 // return true as finished
 func (h *Handler) checkLonghornSetting(setting *harvesterv1.Setting) (bool, error) {
-	if value, err := h.getLonghornStorageNetwork(); err == nil {
-		if setting.Value == value {
-			// check if we need to restart monitoring pods
-			if ok, err := h.checkPodStatusAndStart(); !ok {
-				if err != nil {
-					// only log error but not return to controller
-					logrus.Warnf("check pod status start error: %v", err)
-				}
-				if _, err := h.setConfiguredCondition(setting, false, ReasonInProgress, MsgRestartPod); err != nil {
-					logrus.Warnf("update status error %v", err)
-				}
-				h.settingsController.EnqueueAfter(setting.Name, 5*time.Second)
-				return true, nil
-			}
-
-			// finish
-			if _, err := h.setConfiguredCondition(setting, true, ReasonCompleted, ""); err != nil {
-				logrus.Warnf("update status error %v", err)
-			}
-			return true, nil
-		}
-		return false, nil
-	} else {
+	value, err := h.getLonghornStorageNetwork()
+	if err != nil {
 		logrus.Warnf("get Longhorn settings error: %v", err)
 		return false, err
 	}
+
+	if setting.Value == value {
+		// check if we need to restart monitoring pods
+		if ok, err := h.checkPodStatusAndStart(); !ok {
+			if err != nil {
+				// only log error but not return to controller
+				logrus.Warnf("check pod status start error: %v", err)
+			}
+			if _, err := h.setConfiguredCondition(setting, false, ReasonInProgress, MsgRestartPod); err != nil {
+				logrus.Warnf("update status error %v", err)
+			}
+			h.settingsController.EnqueueAfter(setting.Name, 5*time.Second)
+			return true, nil
+		}
+
+		// finish
+		if _, err := h.setConfiguredCondition(setting, true, ReasonCompleted, ""); err != nil {
+			logrus.Warnf("update status error %v", err)
+		}
+		return true, nil
+	}
+	return false, nil
 }
 
 // true: all detach
 func (h *Handler) checkLonghornVolumeDetach() (bool, error) {
-	if volumes, err := h.longhornVolumeCache.List(util.LonghornSystemNamespaceName, labels.Everything()); err == nil {
-		for _, volume := range volumes {
-			logrus.Infof("volume state: %v", volume.Status.State)
-			if volume.Status.State != "detached" {
-				return false, nil
-			}
-		}
-		return true, nil
-	} else {
+	volumes, err := h.longhornVolumeCache.List(util.LonghornSystemNamespaceName, labels.Everything())
+	if err != nil {
 		logrus.Warnf("volume error %v", err)
 		return false, err
 	}
+
+	for _, volume := range volumes {
+		logrus.Infof("volume state: %v", volume.Status.State)
+		if volume.Status.State != "detached" {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func (h *Handler) checkPrometheusStatusAndStart() (bool, error) {
 	// check prometheus cattle-monitoring-system/rancher-monitoring-prometheus replica
-	if prometheus, err := h.prometheusCache.Get(CattleMonitoringSystemNamespace, RancherMonitoringPrometheus); err == nil {
-		logrus.Infof("prometheus: %v", *prometheus.Spec.Replicas)
-		// check started or not
-		if *prometheus.Spec.Replicas == 0 {
-			logrus.Infof("start prometheus")
-			prometheusCopy := prometheus.DeepCopy()
-			if replicas, err := strconv.Atoi(prometheus.Annotations[ReplicaStorageNetworkAnnotation]); err == nil {
-				*prometheusCopy.Spec.Replicas = int32(replicas)
-			}
-			delete(prometheusCopy.Annotations, ReplicaStorageNetworkAnnotation)
-
-			if _, err := h.prometheus.Update(prometheusCopy); err != nil {
-				logrus.Warnf("prometheus update error %v", err)
-				return false, err
-			}
-		}
-	} else {
+	prometheus, err := h.prometheusCache.Get(CattleMonitoringSystemNamespace, RancherMonitoringPrometheus)
+	if err != nil {
 		return false, err
+	}
+
+	logrus.Infof("prometheus: %v", *prometheus.Spec.Replicas)
+	// check started or not
+	if *prometheus.Spec.Replicas == 0 {
+		logrus.Infof("start prometheus")
+		prometheusCopy := prometheus.DeepCopy()
+		if replicas, err := strconv.Atoi(prometheus.Annotations[ReplicaStorageNetworkAnnotation]); err == nil {
+			*prometheusCopy.Spec.Replicas = int32(replicas)
+		}
+		delete(prometheusCopy.Annotations, ReplicaStorageNetworkAnnotation)
+
+		if _, err := h.prometheus.Update(prometheusCopy); err != nil {
+			logrus.Warnf("prometheus update error %v", err)
+			return false, err
+		}
 	}
 
 	return true, nil
@@ -251,24 +254,25 @@ func (h *Handler) checkPrometheusStatusAndStart() (bool, error) {
 
 func (h *Handler) checkAltermanagerStatusAndStart() (bool, error) {
 	// check alertmanager cattle-monitoring-system/rancher-monitoring-alertmanager replica
-	if alertmanager, err := h.alertmanagerCache.Get(CattleMonitoringSystemNamespace, RancherMonitoringAlertmanager); err == nil {
-		logrus.Infof("alertmanager: %v", *alertmanager.Spec.Replicas)
-		// check started or not
-		if *alertmanager.Spec.Replicas == 0 {
-			logrus.Infof("start alertmanager")
-			alertmanagerCopy := alertmanager.DeepCopy()
-			if replicas, err := strconv.Atoi(alertmanager.Annotations[ReplicaStorageNetworkAnnotation]); err == nil {
-				*alertmanagerCopy.Spec.Replicas = int32(replicas)
-			}
-			delete(alertmanagerCopy.Annotations, ReplicaStorageNetworkAnnotation)
-
-			if _, err := h.alertmanager.Update(alertmanagerCopy); err != nil {
-				logrus.Warnf("alertmanager update error %v", err)
-				return false, err
-			}
-		}
-	} else {
+	alertmanager, err := h.alertmanagerCache.Get(CattleMonitoringSystemNamespace, RancherMonitoringAlertmanager)
+	if err != nil {
 		return false, err
+	}
+
+	logrus.Infof("alertmanager: %v", *alertmanager.Spec.Replicas)
+	// check started or not
+	if *alertmanager.Spec.Replicas == 0 {
+		logrus.Infof("start alertmanager")
+		alertmanagerCopy := alertmanager.DeepCopy()
+		if replicas, err := strconv.Atoi(alertmanager.Annotations[ReplicaStorageNetworkAnnotation]); err == nil {
+			*alertmanagerCopy.Spec.Replicas = int32(replicas)
+		}
+		delete(alertmanagerCopy.Annotations, ReplicaStorageNetworkAnnotation)
+
+		if _, err := h.alertmanager.Update(alertmanagerCopy); err != nil {
+			logrus.Warnf("alertmanager update error %v", err)
+			return false, err
+		}
 	}
 
 	return true, nil
@@ -276,24 +280,25 @@ func (h *Handler) checkAltermanagerStatusAndStart() (bool, error) {
 
 func (h *Handler) checkGrafanaStatusAndStart() (bool, error) {
 	// check deployment cattle-monitoring-system/rancher-monitoring-grafana replica
-	if grafana, err := h.deploymentCache.Get(CattleMonitoringSystemNamespace, RancherMonitoringGrafana); err == nil {
-		logrus.Infof("Grafana: %v", *grafana.Spec.Replicas)
-		// check started or not
-		if *grafana.Spec.Replicas == 0 {
-			logrus.Infof("start grafana")
-			grafanaCopy := grafana.DeepCopy()
-			if replicas, err := strconv.Atoi(grafana.Annotations[ReplicaStorageNetworkAnnotation]); err == nil {
-				*grafanaCopy.Spec.Replicas = int32(replicas)
-			}
-			delete(grafanaCopy.Annotations, ReplicaStorageNetworkAnnotation)
-
-			if _, err := h.deployments.Update(grafanaCopy); err != nil {
-				logrus.Warnf("Grafana update error %v", err)
-				return false, err
-			}
-		}
-	} else {
+	grafana, err := h.deploymentCache.Get(CattleMonitoringSystemNamespace, RancherMonitoringGrafana)
+	if err != nil {
 		return false, err
+	}
+
+	logrus.Infof("Grafana: %v", *grafana.Spec.Replicas)
+	// check started or not
+	if *grafana.Spec.Replicas == 0 {
+		logrus.Infof("start grafana")
+		grafanaCopy := grafana.DeepCopy()
+		if replicas, err := strconv.Atoi(grafana.Annotations[ReplicaStorageNetworkAnnotation]); err == nil {
+			*grafanaCopy.Spec.Replicas = int32(replicas)
+		}
+		delete(grafanaCopy.Annotations, ReplicaStorageNetworkAnnotation)
+
+		if _, err := h.deployments.Update(grafanaCopy); err != nil {
+			logrus.Warnf("Grafana update error %v", err)
+			return false, err
+		}
 	}
 
 	return true, nil
@@ -301,22 +306,23 @@ func (h *Handler) checkGrafanaStatusAndStart() (bool, error) {
 
 func (h *Handler) checkRancherMonitoringStatusAndStart() (bool, error) {
 	// check managedchart fleet-local/rancher-monitoring paused
-	if monitoring, err := h.managedChartCache.Get(FleetLocalNamespace, RancherMonitoring); err == nil {
-		logrus.Infof("Rancher Monitoring: %v", monitoring.Spec.Paused)
-		// check pause or not
-		if monitoring.Spec.Paused {
-			logrus.Infof("start rancher monitoring")
-			monitoringCopy := monitoring.DeepCopy()
-			monitoringCopy.Spec.Paused = false
-			delete(monitoringCopy.Annotations, PausedStorageNetworkAnnotation)
-
-			if _, err := h.managedCharts.Update(monitoringCopy); err != nil {
-				logrus.Warnf("rancher monitoring error %v", err)
-				return false, err
-			}
-		}
-	} else {
+	monitoring, err := h.managedChartCache.Get(FleetLocalNamespace, RancherMonitoring)
+	if err != nil {
 		return false, err
+	}
+
+	logrus.Infof("Rancher Monitoring: %v", monitoring.Spec.Paused)
+	// check pause or not
+	if monitoring.Spec.Paused {
+		logrus.Infof("start rancher monitoring")
+		monitoringCopy := monitoring.DeepCopy()
+		monitoringCopy.Spec.Paused = false
+		delete(monitoringCopy.Annotations, PausedStorageNetworkAnnotation)
+
+		if _, err := h.managedCharts.Update(monitoringCopy); err != nil {
+			logrus.Warnf("rancher monitoring error %v", err)
+			return false, err
+		}
 	}
 
 	return true, nil
@@ -347,22 +353,23 @@ func (h *Handler) checkPodStatusAndStart() (bool, error) {
 
 func (h *Handler) checkRancherMonitoringStatusAndStop() (bool, error) {
 	// check managedchart fleet-local/rancher-monitoring paused
-	if monitoring, err := h.managedChartCache.Get(FleetLocalNamespace, RancherMonitoring); err == nil {
-		logrus.Infof("Rancher Monitoring: %v", monitoring.Spec.Paused)
-		// check pause or not
-		if !monitoring.Spec.Paused {
-			logrus.Infof("stop rancher monitoring")
-			monitoringCopy := monitoring.DeepCopy()
-			monitoringCopy.Annotations[PausedStorageNetworkAnnotation] = "false"
-			monitoringCopy.Spec.Paused = true
-
-			if _, err := h.managedCharts.Update(monitoringCopy); err != nil {
-				logrus.Warnf("rancher monitoring error %v", err)
-				return false, err
-			}
-		}
-	} else {
+	monitoring, err := h.managedChartCache.Get(FleetLocalNamespace, RancherMonitoring)
+	if err != nil {
 		return false, err
+	}
+
+	logrus.Infof("Rancher Monitoring: %v", monitoring.Spec.Paused)
+	// check pause or not
+	if !monitoring.Spec.Paused {
+		logrus.Infof("stop rancher monitoring")
+		monitoringCopy := monitoring.DeepCopy()
+		monitoringCopy.Annotations[PausedStorageNetworkAnnotation] = "false"
+		monitoringCopy.Spec.Paused = true
+
+		if _, err := h.managedCharts.Update(monitoringCopy); err != nil {
+			logrus.Warnf("rancher monitoring error %v", err)
+			return false, err
+		}
 	}
 
 	return true, nil
@@ -370,22 +377,22 @@ func (h *Handler) checkRancherMonitoringStatusAndStop() (bool, error) {
 
 func (h *Handler) checkPrometheusStatusAndStop() (bool, error) {
 	// check prometheus cattle-monitoring-system/rancher-monitoring-prometheus replica
-	if prometheus, err := h.prometheusCache.Get(CattleMonitoringSystemNamespace, RancherMonitoringPrometheus); err == nil {
-		logrus.Infof("prometheus: %v", *prometheus.Spec.Replicas)
-		// check stopped or not
-		if *prometheus.Spec.Replicas != 0 {
-			logrus.Infof("stop prometheus")
-			prometheusCopy := prometheus.DeepCopy()
-			prometheusCopy.Annotations[ReplicaStorageNetworkAnnotation] = strconv.Itoa(int(*prometheus.Spec.Replicas))
-			*prometheusCopy.Spec.Replicas = 0
-
-			if _, err := h.prometheus.Update(prometheusCopy); err != nil {
-				logrus.Warnf("prometheus update error %v", err)
-				return false, err
-			}
-		}
-	} else {
+	prometheus, err := h.prometheusCache.Get(CattleMonitoringSystemNamespace, RancherMonitoringPrometheus)
+	if err != nil {
 		return false, err
+	}
+	logrus.Infof("prometheus: %v", *prometheus.Spec.Replicas)
+	// check stopped or not
+	if *prometheus.Spec.Replicas != 0 {
+		logrus.Infof("stop prometheus")
+		prometheusCopy := prometheus.DeepCopy()
+		prometheusCopy.Annotations[ReplicaStorageNetworkAnnotation] = strconv.Itoa(int(*prometheus.Spec.Replicas))
+		*prometheusCopy.Spec.Replicas = 0
+
+		if _, err := h.prometheus.Update(prometheusCopy); err != nil {
+			logrus.Warnf("prometheus update error %v", err)
+			return false, err
+		}
 	}
 
 	return true, nil
@@ -393,22 +400,23 @@ func (h *Handler) checkPrometheusStatusAndStop() (bool, error) {
 
 func (h *Handler) checkAltermanagerStatusAndStop() (bool, error) {
 	// check alertmanager cattle-monitoring-system/rancher-monitoring-alertmanager replica
-	if alertmanager, err := h.alertmanagerCache.Get(CattleMonitoringSystemNamespace, RancherMonitoringAlertmanager); err == nil {
-		logrus.Infof("alertmanager: %v", *alertmanager.Spec.Replicas)
-		// check stopped or not
-		if *alertmanager.Spec.Replicas != 0 {
-			logrus.Infof("stop alertmanager")
-			alertmanagerCopy := alertmanager.DeepCopy()
-			alertmanagerCopy.Annotations[ReplicaStorageNetworkAnnotation] = strconv.Itoa(int(*alertmanager.Spec.Replicas))
-			*alertmanagerCopy.Spec.Replicas = 0
-
-			if _, err := h.alertmanager.Update(alertmanagerCopy); err != nil {
-				logrus.Warnf("alertmanager update error %v", err)
-				return false, err
-			}
-		}
-	} else {
+	alertmanager, err := h.alertmanagerCache.Get(CattleMonitoringSystemNamespace, RancherMonitoringAlertmanager)
+	if err != nil {
 		return false, err
+	}
+
+	logrus.Infof("alertmanager: %v", *alertmanager.Spec.Replicas)
+	// check stopped or not
+	if *alertmanager.Spec.Replicas != 0 {
+		logrus.Infof("stop alertmanager")
+		alertmanagerCopy := alertmanager.DeepCopy()
+		alertmanagerCopy.Annotations[ReplicaStorageNetworkAnnotation] = strconv.Itoa(int(*alertmanager.Spec.Replicas))
+		*alertmanagerCopy.Spec.Replicas = 0
+
+		if _, err := h.alertmanager.Update(alertmanagerCopy); err != nil {
+			logrus.Warnf("alertmanager update error %v", err)
+			return false, err
+		}
 	}
 
 	return true, nil
@@ -416,22 +424,23 @@ func (h *Handler) checkAltermanagerStatusAndStop() (bool, error) {
 
 func (h *Handler) checkGrafanaStatusAndStop() (bool, error) {
 	// check deployment cattle-monitoring-system/rancher-monitoring-grafana replica
-	if grafana, err := h.deploymentCache.Get(CattleMonitoringSystemNamespace, RancherMonitoringGrafana); err == nil {
-		logrus.Infof("Grafana: %v", *grafana.Spec.Replicas)
-		// check stopped or not
-		if *grafana.Spec.Replicas != 0 {
-			logrus.Infof("stop grafana")
-			grafanaCopy := grafana.DeepCopy()
-			grafanaCopy.Annotations[ReplicaStorageNetworkAnnotation] = strconv.Itoa(int(*grafana.Spec.Replicas))
-			*grafanaCopy.Spec.Replicas = 0
-
-			if _, err := h.deployments.Update(grafanaCopy); err != nil {
-				logrus.Warnf("Grafana update error %v", err)
-				return false, err
-			}
-		}
-	} else {
+	grafana, err := h.deploymentCache.Get(CattleMonitoringSystemNamespace, RancherMonitoringGrafana)
+	if err != nil {
 		return false, err
+	}
+
+	logrus.Infof("Grafana: %v", *grafana.Spec.Replicas)
+	// check stopped or not
+	if *grafana.Spec.Replicas != 0 {
+		logrus.Infof("stop grafana")
+		grafanaCopy := grafana.DeepCopy()
+		grafanaCopy.Annotations[ReplicaStorageNetworkAnnotation] = strconv.Itoa(int(*grafana.Spec.Replicas))
+		*grafanaCopy.Spec.Replicas = 0
+
+		if _, err := h.deployments.Update(grafanaCopy); err != nil {
+			logrus.Warnf("Grafana update error %v", err)
+			return false, err
+		}
 	}
 
 	return true, nil
