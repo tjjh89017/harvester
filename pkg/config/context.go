@@ -82,6 +82,7 @@ type Management struct {
 	VirtFactory              *kubevirt.Factory
 	HarvesterFactory         *ctlharvesterv1.Factory
 	CoreFactory              *corev1.Factory
+	CniFactory               *cniv1.Factory
 	AppsFactory              *appsv1.Factory
 	BatchFactory             *batchv1.Factory
 	RbacFactory              *rbacv1.Factory
@@ -232,6 +233,13 @@ func setupManagement(ctx context.Context, restConfig *rest.Config, opts *generic
 	}
 	management.CoreFactory = core
 	management.starters = append(management.starters, core)
+
+	cni, err := cniv1.NewFactoryFromConfigWithOptions(restConfig, opts)
+	if err != nil {
+		return nil, err
+	}
+	management.CniFactory = cni
+	management.starters = append(management.starters, cni)
 
 	apps, err := appsv1.NewFactoryFromConfigWithOptions(restConfig, opts)
 	if err != nil {

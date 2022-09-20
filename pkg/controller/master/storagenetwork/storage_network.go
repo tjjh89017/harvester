@@ -2,10 +2,15 @@ package storagenetwork
 
 import (
 	"context"
+	"crypto/sha1"
+	"encoding/json"
+	"fmt"
 	"reflect"
 	"strconv"
+	"strings"
 	"time"
 
+	cniv1 "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/apis/k8s.cni.cncf.io/v1"
 	longhornv1 "github.com/longhorn/longhorn-manager/k8s/pkg/apis/longhorn/v1beta1"
 	ctlmgmtv3 "github.com/rancher/rancher/pkg/generated/controllers/management.cattle.io/v3"
 	v1 "github.com/rancher/wrangler/pkg/generated/controllers/apps/v1"
@@ -17,6 +22,7 @@ import (
 	harvesterv1 "github.com/harvester/harvester/pkg/apis/harvesterhci.io/v1beta1"
 	"github.com/harvester/harvester/pkg/config"
 	ctlharvesterv1 "github.com/harvester/harvester/pkg/generated/controllers/harvesterhci.io/v1beta1"
+	ctlcniv1 "github.com/harvester/harvester/pkg/generated/controllers/k8s.cni.cncf.io/v1"
 	ctllonghornv1 "github.com/harvester/harvester/pkg/generated/controllers/longhorn.io/v1beta1"
 	ctlmonitoringv1 "github.com/harvester/harvester/pkg/generated/controllers/monitoring.coreos.com/v1"
 	"github.com/harvester/harvester/pkg/settings"
@@ -28,6 +34,14 @@ const (
 	StorageNetworkAnnotation        = "storage-network.settings.harvesterhci.io"
 	ReplicaStorageNetworkAnnotation = StorageNetworkAnnotation + "/replica"
 	PausedStorageNetworkAnnotation  = StorageNetworkAnnotation + "/paused"
+	HashStorageNetworkAnnotation    = StorageNetworkAnnotation + "/hash"
+	NadStorageNetworkAnnotation     = StorageNetworkAnnotation + "/net-attach-def"
+	OldNadStorageNetworkAnnotation  = StorageNetworkAnnotation + "/old-net-attach-def"
+
+	StorageNetworkNetAttachDefPrefix    = "storagenetwork-"
+	StorageNetworkNetAttachDefNamespace = "harvester-system"
+
+	BridgeSuffix = "-br"
 
 	// status
 	ReasonInProgress         = "In Progress"
@@ -48,23 +62,62 @@ const (
 	RancherMonitoringGrafana        = "rancher-monitoring-grafana"
 )
 
+type Config struct {
+	ClusterNetwork string   `json:"clusterNetwork,omitempty"`
+	Vlan           uint16   `json:"vlan,omitempty"`
+	Range          string   `json:"range,omitempty"`
+	Exclude        []string `json:"exclude,omitempty"`
+}
+
+// TODO use bridge & weherabouts struct directly
+type BridgeConfig struct {
+	CniVersion  string     `json:"cniVersion"`
+	Type        string     `json:"type"`
+	Bridge      string     `json:"bridge"`
+	PromiscMode bool       `json:"promiscMode"`
+	Vlan        uint16     `json:"vlan"`
+	IPAM        IPAMConfig `json:"ipam"`
+}
+
+type IPAMConfig struct {
+	Type    string   `json:"type"`
+	Range   string   `json:"range"`
+	Exclude []string `json:"exclude,omitempty"`
+}
+
+func NewBridgeConfig() *BridgeConfig {
+	return &BridgeConfig{
+		CniVersion:  "0.3.1",
+		Type:        "bridge",
+		Bridge:      "",
+		PromiscMode: true,
+		Vlan:        1,
+		IPAM: IPAMConfig{
+			Type:  "whereabouts",
+			Range: "",
+		},
+	}
+}
+
 type Handler struct {
-	ctx                  context.Context
-	longhornSettings     ctllonghornv1.SettingClient
-	longhornSettingCache ctllonghornv1.SettingCache
-	longhornVolumes      ctllonghornv1.VolumeClient
-	longhornVolumeCache  ctllonghornv1.VolumeCache
-	prometheus           ctlmonitoringv1.PrometheusClient
-	prometheusCache      ctlmonitoringv1.PrometheusCache
-	alertmanager         ctlmonitoringv1.AlertmanagerClient
-	alertmanagerCache    ctlmonitoringv1.AlertmanagerCache
-	deployments          v1.DeploymentClient
-	deploymentCache      v1.DeploymentCache
-	managedCharts        ctlmgmtv3.ManagedChartClient
-	managedChartCache    ctlmgmtv3.ManagedChartCache
-	settings             ctlharvesterv1.SettingClient
-	settingsCache        ctlharvesterv1.SettingCache
-	settingsController   ctlharvesterv1.SettingController
+	ctx                               context.Context
+	longhornSettings                  ctllonghornv1.SettingClient
+	longhornSettingCache              ctllonghornv1.SettingCache
+	longhornVolumes                   ctllonghornv1.VolumeClient
+	longhornVolumeCache               ctllonghornv1.VolumeCache
+	prometheus                        ctlmonitoringv1.PrometheusClient
+	prometheusCache                   ctlmonitoringv1.PrometheusCache
+	alertmanager                      ctlmonitoringv1.AlertmanagerClient
+	alertmanagerCache                 ctlmonitoringv1.AlertmanagerCache
+	deployments                       v1.DeploymentClient
+	deploymentCache                   v1.DeploymentCache
+	managedCharts                     ctlmgmtv3.ManagedChartClient
+	managedChartCache                 ctlmgmtv3.ManagedChartCache
+	settings                          ctlharvesterv1.SettingClient
+	settingsCache                     ctlharvesterv1.SettingCache
+	settingsController                ctlharvesterv1.SettingController
+	networkAttachmentDefinitions      ctlcniv1.NetworkAttachmentDefinitionClient
+	networkAttachmentDefinitionsCache ctlcniv1.NetworkAttachmentDefinitionCache
 }
 
 // register the setting controller and reconsile longhorn setting when storage network changed
@@ -76,24 +129,27 @@ func Register(ctx context.Context, management *config.Management, opts config.Op
 	alertmanager := management.MonitoringFactory.Monitoring().V1().Alertmanager()
 	deployments := management.AppsFactory.Apps().V1().Deployment()
 	managedCharts := management.RancherManagementFactory.Management().V3().ManagedChart()
+	networkAttachmentDefinitions := management.CniFactory.K8s().V1().NetworkAttachmentDefinition()
 
 	controller := &Handler{
-		ctx:                  ctx,
-		longhornSettings:     longhornSettings,
-		longhornSettingCache: longhornSettings.Cache(),
-		longhornVolumes:      longhornVolumes,
-		longhornVolumeCache:  longhornVolumes.Cache(),
-		prometheus:           prometheus,
-		prometheusCache:      prometheus.Cache(),
-		alertmanager:         alertmanager,
-		alertmanagerCache:    alertmanager.Cache(),
-		settings:             settings,
-		settingsCache:        settings.Cache(),
-		settingsController:   settings,
-		deployments:          deployments,
-		deploymentCache:      deployments.Cache(),
-		managedCharts:        managedCharts,
-		managedChartCache:    managedCharts.Cache(),
+		ctx:                               ctx,
+		longhornSettings:                  longhornSettings,
+		longhornSettingCache:              longhornSettings.Cache(),
+		longhornVolumes:                   longhornVolumes,
+		longhornVolumeCache:               longhornVolumes.Cache(),
+		prometheus:                        prometheus,
+		prometheusCache:                   prometheus.Cache(),
+		alertmanager:                      alertmanager,
+		alertmanagerCache:                 alertmanager.Cache(),
+		settings:                          settings,
+		settingsCache:                     settings.Cache(),
+		settingsController:                settings,
+		deployments:                       deployments,
+		deploymentCache:                   deployments.Cache(),
+		managedCharts:                     managedCharts,
+		managedChartCache:                 managedCharts.Cache(),
+		networkAttachmentDefinitions:      networkAttachmentDefinitions,
+		networkAttachmentDefinitionsCache: networkAttachmentDefinitions.Cache(),
 	}
 
 	settings.OnChange(ctx, ControllerName, controller.OnStorageNetworkChange)
@@ -124,28 +180,59 @@ func (h *Handler) setConfiguredCondition(setting *harvesterv1.Setting, finish bo
 }
 
 // webhook needs check if VMs are off
-// webhook needs check if nad is existing
 func (h *Handler) OnStorageNetworkChange(key string, setting *harvesterv1.Setting) (*harvesterv1.Setting, error) {
 	if setting == nil || setting.DeletionTimestamp != nil || setting.Name != settings.StorageNetworkName {
 		return setting, nil
 	}
+	settingCopy := setting.DeepCopy()
 
-	if h.checkLonghornSetting(setting) {
+	if settingCopy.Annotations == nil {
+		settingCopy.Annotations = make(map[string]string)
+	}
+
+	currentHash := h.sha1(settingCopy.Value)
+	if !h.checkHash(settingCopy) {
+		if settingCopy.Value == "" {
+			settingCopy.Annotations[OldNadStorageNetworkAnnotation] = settingCopy.Annotations[NadStorageNetworkAnnotation]
+			settingCopy.Annotations[NadStorageNetworkAnnotation] = ""
+			h.saveHash(settingCopy, currentHash)
+
+			if _, err := h.setConfiguredCondition(settingCopy, false, ReasonInProgress, "enqueue"); err != nil {
+				logrus.Warnf("reset update status error %v", err)
+			}
+			h.settingsController.Enqueue(settingCopy.Name)
+			return nil, nil
+		} else {
+			if err := h.createAndSaveNad(settingCopy); err != nil {
+				return nil, err
+			}
+
+			h.saveHash(settingCopy, currentHash)
+
+			if _, err := h.setConfiguredCondition(settingCopy, false, ReasonInProgress, "create nad"); err != nil {
+				logrus.Warnf("create nad update status error %v", err)
+			}
+			h.settingsController.Enqueue(settingCopy.Name)
+			return nil, nil
+		}
+	}
+
+	if h.checkLonghornSetting(settingCopy) {
 		// finish
 		return nil, nil
 	}
 
-	logrus.Infof("storage network change: %s", setting.Value)
+	logrus.Infof("storage network change: %s", settingCopy.Value)
 
 	// if replica eq 0, skip
 	// save replica to annotation
 	// set replica to 0
 	if !h.checkPodStatusAndStop() {
 		logrus.Infof("Requeue to check pod status again")
-		if _, err := h.setConfiguredCondition(setting, false, ReasonInProgress, MsgStopPod); err != nil {
+		if _, err := h.setConfiguredCondition(settingCopy, false, ReasonInProgress, MsgStopPod); err != nil {
 			logrus.Warnf("update status error %v", err)
 		}
-		h.settingsController.EnqueueAfter(setting.Name, 5*time.Second)
+		h.settingsController.EnqueueAfter(settingCopy.Name, 5*time.Second)
 		return nil, nil
 	}
 
@@ -158,25 +245,128 @@ func (h *Handler) OnStorageNetworkChange(key string, setting *harvesterv1.Settin
 			logrus.Warnf("check Longhorn volume error: %v", err)
 		}
 		logrus.Infof("still has attached volume")
-		if _, err := h.setConfiguredCondition(setting, false, ReasonInProgress, MsgWaitForVolumes); err != nil {
+		if _, err := h.setConfiguredCondition(settingCopy, false, ReasonInProgress, MsgWaitForVolumes); err != nil {
 			logrus.Warnf("update status error %v", err)
 		}
-		h.settingsController.EnqueueAfter(setting.Name, 5*time.Second)
+		h.settingsController.EnqueueAfter(settingCopy.Name, 5*time.Second)
 		return nil, nil
 	}
 
 	logrus.Infof("all volumes are detached")
 	logrus.Infof("update Longhorn settings")
 	// push LH setting
-	if err := h.updateLonghornStorageNetwork(setting.Value); err != nil {
+	nadName := settingCopy.Annotations[NadStorageNetworkAnnotation]
+	if err := h.updateLonghornStorageNetwork(nadName); err != nil {
 		logrus.Warnf("Update Longhorn setting error %v", err)
 	}
-	if _, err := h.setConfiguredCondition(setting, false, ReasonInProgress, MsgUpdateLonghornSetting); err != nil {
+	if _, err := h.setConfiguredCondition(settingCopy, false, ReasonInProgress, MsgUpdateLonghornSetting); err != nil {
 		logrus.Warnf("update status error %v", err)
 	}
-	h.settingsController.EnqueueAfter(setting.Name, 5*time.Second)
+	h.settingsController.EnqueueAfter(settingCopy.Name, 5*time.Second)
 
 	return nil, nil
+}
+
+// calc sha1 hash
+func (h *Handler) sha1(s string) string {
+	hash := sha1.New()
+	hash.Write([]byte(s))
+	sha1sum := hash.Sum(nil)
+	return fmt.Sprintf("%x", sha1sum)
+}
+
+func (h *Handler) checkHash(setting *harvesterv1.Setting) bool {
+	currentHash := h.sha1(setting.Value)
+	savedHash := setting.Annotations[HashStorageNetworkAnnotation]
+	return currentHash == savedHash
+}
+
+func (h *Handler) saveHash(setting *harvesterv1.Setting, hash string) {
+	setting.Annotations[HashStorageNetworkAnnotation] = hash
+}
+
+func (h *Handler) createAndSaveNad(setting *harvesterv1.Setting) error {
+	var config Config
+	bridgeConfig := NewBridgeConfig()
+
+	if err := json.Unmarshal([]byte(setting.Value), &config); err != nil {
+		logrus.Warnf("parsing value error %v", err)
+		return err
+	}
+
+	bridgeConfig.Bridge = config.ClusterNetwork + BridgeSuffix
+	bridgeConfig.Vlan = config.Vlan
+	bridgeConfig.IPAM.Range = config.Range
+
+	if len(config.Exclude) > 0 {
+		bridgeConfig.IPAM.Exclude = config.Exclude
+	}
+
+	nadConfig, err := json.Marshal(bridgeConfig)
+	if err != nil {
+		logrus.Warnf("output json error %v", err)
+		return err
+	}
+
+	currentHash := h.sha1(setting.Value)
+	nad := cniv1.NetworkAttachmentDefinition{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      StorageNetworkNetAttachDefPrefix + currentHash,
+			Namespace: StorageNetworkNetAttachDefNamespace,
+		},
+	}
+	nad.Annotations = map[string]string{
+		StorageNetworkAnnotation: "true",
+	}
+	nad.Spec.Config = string(nadConfig)
+
+	// create nad
+	if _, err := h.networkAttachmentDefinitions.Create(&nad); err != nil {
+		logrus.Warnf("create net-attach-def failed %v", err)
+		return err
+	}
+
+	// save nad name
+	setting.Annotations[OldNadStorageNetworkAnnotation] = setting.Annotations[NadStorageNetworkAnnotation]
+	setting.Annotations[NadStorageNetworkAnnotation] = nad.Namespace + "/" + nad.Name
+
+	return nil
+}
+
+func (h *Handler) removeOldNad(setting *harvesterv1.Setting) error {
+	oldNad := setting.Annotations[OldNadStorageNetworkAnnotation]
+	if oldNad == "" {
+		return nil
+	}
+
+	nadName := strings.Split(oldNad, "/")
+	if len(nadName) != 2 {
+		// ignore this error and skip
+		logrus.Warnf("split nad namespace and name failed")
+		setting.Annotations[OldNadStorageNetworkAnnotation] = ""
+		return nil
+	}
+	namespace := nadName[0]
+	name := nadName[1]
+
+	if _, err := h.networkAttachmentDefinitionsCache.Get(namespace, name); err != nil {
+		if apierrors.IsNotFound(err) {
+			setting.Annotations[OldNadStorageNetworkAnnotation] = ""
+			return nil
+		}
+
+		// retry again
+		logrus.Warnf("check net-attach-def existing error %v", err)
+		return err
+	}
+
+	if err := h.networkAttachmentDefinitions.Delete(namespace, name, &metav1.DeleteOptions{}); err != nil {
+		logrus.Warnf("remove nad error %v", err)
+		return err
+	}
+
+	setting.Annotations[OldNadStorageNetworkAnnotation] = ""
+	return nil
 }
 
 // return true as finished
@@ -187,7 +377,8 @@ func (h *Handler) checkLonghornSetting(setting *harvesterv1.Setting) bool {
 		return false
 	}
 
-	if setting.Value == value {
+	currentNad := setting.Annotations[NadStorageNetworkAnnotation]
+	if currentNad == value {
 		// check if we need to restart monitoring pods
 		if !h.checkPodStatusAndStart() {
 			if _, err := h.setConfiguredCondition(setting, false, ReasonInProgress, MsgRestartPod); err != nil {
@@ -197,8 +388,15 @@ func (h *Handler) checkLonghornSetting(setting *harvesterv1.Setting) bool {
 			return true
 		}
 
+		settingCopy := setting.DeepCopy()
+		if err := h.removeOldNad(settingCopy); err != nil {
+			logrus.Warnf("remove old nad error %v", err)
+			h.settingsController.EnqueueAfter(setting.Name, 5*time.Second)
+			return true
+		}
+
 		// finish
-		if _, err := h.setConfiguredCondition(setting, true, ReasonCompleted, ""); err != nil {
+		if _, err := h.setConfiguredCondition(settingCopy, true, ReasonCompleted, ""); err != nil {
 			logrus.Warnf("update status error %v", err)
 		}
 		return true
