@@ -60,6 +60,10 @@ const (
 	FleetLocalNamespace             = "fleet-local"
 	RancherMonitoring               = "rancher-monitoring"
 	RancherMonitoringGrafana        = "rancher-monitoring-grafana"
+
+	// VM import controller
+	HarvesterSystemNamespace    = "harvester-system"
+	HarvesterVMImportController = "harvester-harvester-vm-import-controller"
 )
 
 type Config struct {
@@ -190,31 +194,8 @@ func (h *Handler) OnStorageNetworkChange(key string, setting *harvesterv1.Settin
 		settingCopy.Annotations = make(map[string]string)
 	}
 
-	currentHash := h.sha1(settingCopy.Value)
-	if !h.checkHash(settingCopy) {
-		if settingCopy.Value == "" {
-			settingCopy.Annotations[OldNadStorageNetworkAnnotation] = settingCopy.Annotations[NadStorageNetworkAnnotation]
-			settingCopy.Annotations[NadStorageNetworkAnnotation] = ""
-			h.saveHash(settingCopy, currentHash)
-
-			if _, err := h.setConfiguredCondition(settingCopy, false, ReasonInProgress, "enqueue"); err != nil {
-				logrus.Warnf("reset update status error %v", err)
-			}
-			h.settingsController.Enqueue(settingCopy.Name)
-			return nil, nil
-		} else {
-			if err := h.createAndSaveNad(settingCopy); err != nil {
-				return nil, err
-			}
-
-			h.saveHash(settingCopy, currentHash)
-
-			if _, err := h.setConfiguredCondition(settingCopy, false, ReasonInProgress, "create nad"); err != nil {
-				logrus.Warnf("create nad update status error %v", err)
-			}
-			h.settingsController.Enqueue(settingCopy.Name)
-			return nil, nil
-		}
+	if ok, err := h.checkChange(settingCopy); !ok {
+		return nil, err
 	}
 
 	if h.checkLonghornSetting(settingCopy) {
@@ -281,8 +262,8 @@ func (h *Handler) checkHash(setting *harvesterv1.Setting) bool {
 	return currentHash == savedHash
 }
 
-func (h *Handler) saveHash(setting *harvesterv1.Setting, hash string) {
-	setting.Annotations[HashStorageNetworkAnnotation] = hash
+func (h *Handler) saveHash(setting *harvesterv1.Setting) {
+	setting.Annotations[HashStorageNetworkAnnotation] = h.sha1(setting.Value)
 }
 
 func (h *Handler) createAndSaveNad(setting *harvesterv1.Setting) error {
@@ -331,6 +312,35 @@ func (h *Handler) createAndSaveNad(setting *harvesterv1.Setting) error {
 	setting.Annotations[NadStorageNetworkAnnotation] = nad.Namespace + "/" + nad.Name
 
 	return nil
+}
+
+func (h *Handler) checkChange(setting *harvesterv1.Setting) (bool, error) {
+	if !h.checkHash(setting) {
+		if setting.Value == "" {
+			setting.Annotations[OldNadStorageNetworkAnnotation] = setting.Annotations[NadStorageNetworkAnnotation]
+			setting.Annotations[NadStorageNetworkAnnotation] = ""
+			h.saveHash(setting)
+
+			if _, err := h.setConfiguredCondition(setting, false, ReasonInProgress, "enqueue"); err != nil {
+				logrus.Warnf("reset update status error %v", err)
+			}
+			h.settingsController.Enqueue(setting.Name)
+			return false, nil
+		} else {
+			if err := h.createAndSaveNad(setting); err != nil {
+				return false, err
+			}
+
+			h.saveHash(setting)
+
+			if _, err := h.setConfiguredCondition(setting, false, ReasonInProgress, "create nad"); err != nil {
+				logrus.Warnf("create nad update status error %v", err)
+			}
+			h.settingsController.Enqueue(setting.Name)
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func (h *Handler) removeOldNad(setting *harvesterv1.Setting) error {
@@ -534,6 +544,35 @@ func (h *Handler) checkRancherMonitoringStatusAndStart() bool {
 	return true
 }
 
+func (h *Handler) checkVMImportControllerStatusAndStart() bool {
+	// check deployment harvester-system/harvester-harvester-vm-import-controller replica
+	vmimportcontroller, err := h.deploymentCache.Get(HarvesterSystemNamespace, HarvesterVMImportController)
+	if err != nil {
+		logrus.Warnf("vm import controller get error %v", err)
+		return false
+	}
+
+	logrus.Infof("VM Import Controller: %v", *vmimportcontroller.Spec.Replicas)
+	// check started or not
+	if *vmimportcontroller.Spec.Replicas == 0 {
+		logrus.Infof("start vm import controller")
+		vmimportcontrollerCopy := vmimportcontroller.DeepCopy()
+		*vmimportcontrollerCopy.Spec.Replicas = 1
+		if replicas, err := strconv.Atoi(vmimportcontroller.Annotations[ReplicaStorageNetworkAnnotation]); err == nil {
+			*vmimportcontrollerCopy.Spec.Replicas = int32(replicas)
+		}
+		delete(vmimportcontrollerCopy.Annotations, ReplicaStorageNetworkAnnotation)
+
+		if _, err := h.deployments.Update(vmimportcontrollerCopy); err != nil {
+			logrus.Warnf("VM Import Controller update error %v", err)
+			return false
+		}
+		return false
+	}
+
+	return true
+}
+
 // check Pod status, if all pods are start, return true
 func (h *Handler) checkPodStatusAndStart() bool {
 	allStarted := true
@@ -551,6 +590,10 @@ func (h *Handler) checkPodStatusAndStart() bool {
 	}
 
 	if !h.checkRancherMonitoringStatusAndStart() {
+		allStarted = false
+	}
+
+	if !h.checkVMImportControllerStatusAndStart() {
 		allStarted = false
 	}
 
@@ -660,6 +703,32 @@ func (h *Handler) checkGrafanaStatusAndStop() bool {
 	return true
 }
 
+func (h *Handler) checkVMImportControllerStatusAndStop() bool {
+	// check deployment harvester-system/harvester-harvester-vm-import-controller replica
+	vmimportcontroller, err := h.deploymentCache.Get(HarvesterSystemNamespace, HarvesterVMImportController)
+	if err != nil {
+		logrus.Warnf("vmimportcontroller get error %v", err)
+		return false
+	}
+
+	logrus.Infof("VM Import Controller: %v", *vmimportcontroller.Spec.Replicas)
+	// check stopped or not
+	if *vmimportcontroller.Spec.Replicas != 0 {
+		logrus.Infof("stop vmi import controller")
+		vmimportcontrollerCopy := vmimportcontroller.DeepCopy()
+		vmimportcontrollerCopy.Annotations[ReplicaStorageNetworkAnnotation] = strconv.Itoa(int(*vmimportcontroller.Spec.Replicas))
+		*vmimportcontrollerCopy.Spec.Replicas = 0
+
+		if _, err := h.deployments.Update(vmimportcontrollerCopy); err != nil {
+			logrus.Warnf("VM Import Controller update error %v", err)
+			return false
+		}
+		return false
+	}
+
+	return true
+}
+
 // check Pod status, if all pods are stopped, return true
 func (h *Handler) checkPodStatusAndStop() bool {
 	allStopped := true
@@ -677,6 +746,10 @@ func (h *Handler) checkPodStatusAndStop() bool {
 	}
 
 	if !h.checkGrafanaStatusAndStop() {
+		allStopped = false
+	}
+
+	if !h.checkVMImportControllerStatusAndStop() {
 		allStopped = false
 	}
 
