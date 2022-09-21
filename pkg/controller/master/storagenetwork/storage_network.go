@@ -10,7 +10,8 @@ import (
 	"strings"
 	"time"
 
-	cniv1 "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/apis/k8s.cni.cncf.io/v1"
+	cniv1 "github.com/containernetworking/cni/pkg/types"
+	nadv1 "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/apis/k8s.cni.cncf.io/v1"
 	longhornv1 "github.com/longhorn/longhorn-manager/k8s/pkg/apis/longhorn/v1beta1"
 	ctlmgmtv3 "github.com/rancher/rancher/pkg/generated/controllers/management.cattle.io/v3"
 	v1 "github.com/rancher/wrangler/pkg/generated/controllers/apps/v1"
@@ -42,6 +43,10 @@ const (
 	StorageNetworkNetAttachDefNamespace = "harvester-system"
 
 	BridgeSuffix = "-br"
+	CNIVersion   = "0.3.1"
+	DefaultPVID  = 1
+	DefaultCNI   = "bridge"
+	DefaultIPAM  = "whereabouts"
 
 	// status
 	ReasonInProgress         = "In Progress"
@@ -75,8 +80,7 @@ type Config struct {
 
 // TODO use bridge & weherabouts struct directly
 type BridgeConfig struct {
-	CniVersion  string     `json:"cniVersion"`
-	Type        string     `json:"type"`
+	cniv1.NetConf
 	Bridge      string     `json:"bridge"`
 	PromiscMode bool       `json:"promiscMode"`
 	Vlan        uint16     `json:"vlan"`
@@ -91,14 +95,14 @@ type IPAMConfig struct {
 
 func NewBridgeConfig() *BridgeConfig {
 	return &BridgeConfig{
-		CniVersion:  "0.3.1",
-		Type:        "bridge",
-		Bridge:      "",
+		NetConf: cniv1.NetConf{
+			CNIVersion: CNIVersion,
+			Type:       DefaultCNI,
+		},
 		PromiscMode: true,
-		Vlan:        1,
+		Vlan:        DefaultPVID,
 		IPAM: IPAMConfig{
-			Type:  "whereabouts",
-			Range: "",
+			Type: DefaultIPAM,
 		},
 	}
 }
@@ -276,8 +280,12 @@ func (h *Handler) createAndSaveNad(setting *harvesterv1.Setting) error {
 	}
 
 	bridgeConfig.Bridge = config.ClusterNetwork + BridgeSuffix
-	bridgeConfig.Vlan = config.Vlan
 	bridgeConfig.IPAM.Range = config.Range
+
+	if config.Vlan == 0 {
+		config.Vlan = DefaultPVID
+	}
+	bridgeConfig.Vlan = config.Vlan
 
 	if len(config.Exclude) > 0 {
 		bridgeConfig.IPAM.Exclude = config.Exclude
@@ -290,7 +298,7 @@ func (h *Handler) createAndSaveNad(setting *harvesterv1.Setting) error {
 	}
 
 	currentHash := h.sha1(setting.Value)
-	nad := cniv1.NetworkAttachmentDefinition{
+	nad := nadv1.NetworkAttachmentDefinition{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      StorageNetworkNetAttachDefPrefix + currentHash,
 			Namespace: StorageNetworkNetAttachDefNamespace,
