@@ -596,7 +596,7 @@ func (v *settingValidator) validateStorageNetwork(setting *v1beta1.Setting) erro
 		return nil
 	}
 
-	return v.checkVaild(setting)
+	return v.checkStorageNetworkValueVaild(setting)
 }
 
 func (v *settingValidator) validateUpdateStorageNetwork(oldSetting *v1beta1.Setting, newSetting *v1beta1.Setting) error {
@@ -612,14 +612,14 @@ func (v *settingValidator) validateUpdateStorageNetwork(oldSetting *v1beta1.Sett
 		return nil
 	}
 
-	return v.checkVaild(newSetting)
+	return v.checkStorageNetworkValueVaild(newSetting)
 }
 
 func (v *settingValidator) validateDeleteStorageNetwork(setting *v1beta1.Setting) error {
 	return werror.NewMethodNotAllowed(fmt.Sprintf("Disallow delete setting named %s", settings.StorageNetworkName))
 }
 
-func (v *settingValidator) checkVaild(setting *v1beta1.Setting) error {
+func (v *settingValidator) checkStorageNetworkValueVaild(setting *v1beta1.Setting) error {
 	// check JSON is valid
 	if setting.Value != "" {
 		var config storagenetworkctl.Config
