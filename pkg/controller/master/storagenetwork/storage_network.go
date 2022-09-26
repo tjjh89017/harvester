@@ -443,6 +443,10 @@ func (h *Handler) checkPrometheusStatusAndStart() bool {
 	// check prometheus cattle-monitoring-system/rancher-monitoring-prometheus replica
 	prometheus, err := h.prometheusCache.Get(CattleMonitoringSystemNamespace, RancherMonitoringPrometheus)
 	if err != nil {
+		if apierrors.IsNotFound(err) {
+			logrus.Infof("prometheus not found. skip")
+			return true
+		}
 		logrus.Warnf("prometheus get error %v", err)
 		return false
 	}
@@ -472,6 +476,10 @@ func (h *Handler) checkAltermanagerStatusAndStart() bool {
 	// check alertmanager cattle-monitoring-system/rancher-monitoring-alertmanager replica
 	alertmanager, err := h.alertmanagerCache.Get(CattleMonitoringSystemNamespace, RancherMonitoringAlertmanager)
 	if err != nil {
+		if apierrors.IsNotFound(err) {
+			logrus.Infof("Alertmanager not found. skip")
+			return true
+		}
 		logrus.Warnf("alertmanager get error %v", err)
 		return false
 	}
@@ -501,6 +509,10 @@ func (h *Handler) checkGrafanaStatusAndStart() bool {
 	// check deployment cattle-monitoring-system/rancher-monitoring-grafana replica
 	grafana, err := h.deploymentCache.Get(CattleMonitoringSystemNamespace, RancherMonitoringGrafana)
 	if err != nil {
+		if apierrors.IsNotFound(err) {
+			logrus.Infof("grafana not found. skip")
+			return true
+		}
 		logrus.Warnf("grafana get error %v", err)
 		return false
 	}
@@ -530,6 +542,10 @@ func (h *Handler) checkRancherMonitoringStatusAndStart() bool {
 	// check managedchart fleet-local/rancher-monitoring paused
 	monitoring, err := h.managedChartCache.Get(FleetLocalNamespace, RancherMonitoring)
 	if err != nil {
+		if apierrors.IsNotFound(err) {
+			logrus.Infof("rancher monitoring not found. skip")
+			return true
+		}
 		logrus.Warnf("rancher monitoring get error %v", err)
 		return false
 	}
@@ -556,6 +572,10 @@ func (h *Handler) checkVMImportControllerStatusAndStart() bool {
 	// check deployment harvester-system/harvester-harvester-vm-import-controller replica
 	vmimportcontroller, err := h.deploymentCache.Get(HarvesterSystemNamespace, HarvesterVMImportController)
 	if err != nil {
+		if apierrors.IsNotFound(err) {
+			logrus.Infof("VM import controller not found. skip")
+			return true
+		}
 		logrus.Warnf("vm import controller get error %v", err)
 		return false
 	}
@@ -612,6 +632,10 @@ func (h *Handler) checkRancherMonitoringStatusAndStop() bool {
 	// check managedchart fleet-local/rancher-monitoring paused
 	monitoring, err := h.managedChartCache.Get(FleetLocalNamespace, RancherMonitoring)
 	if err != nil {
+		if apierrors.IsNotFound(err) {
+			logrus.Infof("rancher monitoring not found. skip")
+			return true
+		}
 		logrus.Warnf("rancher monitoring get error %v", err)
 		return false
 	}
@@ -638,6 +662,10 @@ func (h *Handler) checkPrometheusStatusAndStop() bool {
 	// check prometheus cattle-monitoring-system/rancher-monitoring-prometheus replica
 	prometheus, err := h.prometheusCache.Get(CattleMonitoringSystemNamespace, RancherMonitoringPrometheus)
 	if err != nil {
+		if apierrors.IsNotFound(err) {
+			logrus.Infof("prometheus not found. skip")
+			return true
+		}
 		logrus.Warnf("prometheus get error %v", err)
 		return false
 	}
@@ -663,6 +691,10 @@ func (h *Handler) checkAltermanagerStatusAndStop() bool {
 	// check alertmanager cattle-monitoring-system/rancher-monitoring-alertmanager replica
 	alertmanager, err := h.alertmanagerCache.Get(CattleMonitoringSystemNamespace, RancherMonitoringAlertmanager)
 	if err != nil {
+		if apierrors.IsNotFound(err) {
+			logrus.Infof("Alertmanager not found. skip")
+			return true
+		}
 		logrus.Warnf("alertmanager get error %v", err)
 		return false
 	}
@@ -689,6 +721,10 @@ func (h *Handler) checkGrafanaStatusAndStop() bool {
 	// check deployment cattle-monitoring-system/rancher-monitoring-grafana replica
 	grafana, err := h.deploymentCache.Get(CattleMonitoringSystemNamespace, RancherMonitoringGrafana)
 	if err != nil {
+		if apierrors.IsNotFound(err) {
+			logrus.Infof("grafana no found. skip")
+			return true
+		}
 		logrus.Warnf("grafana get error %v", err)
 		return false
 	}
@@ -715,6 +751,10 @@ func (h *Handler) checkVMImportControllerStatusAndStop() bool {
 	// check deployment harvester-system/harvester-harvester-vm-import-controller replica
 	vmimportcontroller, err := h.deploymentCache.Get(HarvesterSystemNamespace, HarvesterVMImportController)
 	if err != nil {
+		if apierrors.IsNotFound(err) {
+			logrus.Infof("VM import controller no found. skip")
+			return true
+		}
 		logrus.Warnf("vmimportcontroller get error %v", err)
 		return false
 	}
