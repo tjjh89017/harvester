@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -626,6 +627,14 @@ func (v *settingValidator) checkStorageNetworkValueVaild(setting *v1beta1.Settin
 		if err := json.Unmarshal([]byte(setting.Value), &config); err != nil {
 			return werror.NewInvalidError(fmt.Sprintf("failed to unmarshal the setting value, %v", err), "value")
 		}
+
+		if err := v.checkStorageNetworkVlanValid(&config); err != nil {
+			return werror.NewInvalidError(err.Error(), "value")
+		}
+
+		if err := v.checkStorageNetworkRangeValid(&config); err != nil {
+			return werror.NewInvalidError(err.Error(), "value")
+		}
 	}
 
 	// check all VM are stopped, there is no VMI
@@ -637,5 +646,24 @@ func (v *settingValidator) checkStorageNetworkValueVaild(setting *v1beta1.Settin
 		return werror.NewInvalidError("Please stop all VMs/VMIs before setting storage-network", "value")
 	}
 
+	return nil
+}
+
+func (v *settingValidator) checkStorageNetworkVlanValid(config *storagenetworkctl.Config) error {
+	if config.Vlan < 1 || config.Vlan > 4094 {
+		return fmt.Errorf("VLAN should be 1~4094")
+	}
+	return nil
+}
+
+func (v *settingValidator) checkStorageNetworkRangeValid(config *storagenetworkctl.Config) error {
+	networkRange := config.Range
+	ip, network, err := net.ParseCIDR(networkRange)
+	if err != nil {
+		return err
+	}
+	if !network.IP.Equal(ip) {
+		return fmt.Errorf("Range should be subnet CIDR %v", network)
+	}
 	return nil
 }
