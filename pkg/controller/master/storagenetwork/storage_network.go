@@ -221,8 +221,6 @@ func (h *Handler) OnStorageNetworkChange(key string, setting *harvesterv1.Settin
 		return nil, nil
 	}
 
-	logrus.Infof("all pods are stopped")
-
 	// check volume detach before put LH settings
 	if ok, err := h.checkLonghornVolumeDetach(); !ok {
 		if err != nil {
@@ -237,6 +235,7 @@ func (h *Handler) OnStorageNetworkChange(key string, setting *harvesterv1.Settin
 		return nil, nil
 	}
 
+	logrus.Infof("all pods are stopped")
 	logrus.Infof("all volumes are detached")
 	logrus.Infof("update Longhorn settings")
 	// push LH setting
