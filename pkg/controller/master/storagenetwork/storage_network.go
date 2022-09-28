@@ -360,7 +360,7 @@ func (h *Handler) removeOldNad(setting *harvesterv1.Setting) error {
 	nadName := strings.Split(oldNad, "/")
 	if len(nadName) != 2 {
 		// ignore this error and skip
-		logrus.Warnf("split nad namespace and name failed")
+		logrus.Warnf("split nad namespace and name failed %s", oldNad)
 		setting.Annotations[OldNadStorageNetworkAnnotation] = ""
 		return nil
 	}
@@ -431,8 +431,8 @@ func (h *Handler) checkLonghornVolumeDetach() (bool, error) {
 	}
 
 	for _, volume := range volumes {
-		logrus.Infof("volume state: %v", volume.Status.State)
 		if volume.Status.State != "detached" {
+			logrus.Infof("volume state: %v", volume.Status.State)
 			return false, nil
 		}
 	}
@@ -451,13 +451,13 @@ func (h *Handler) checkPrometheusStatusAndStart() bool {
 		return false
 	}
 
-	logrus.Infof("prometheus: %v", *prometheus.Spec.Replicas)
 	// check started or not
-	if *prometheus.Spec.Replicas == 0 {
+	if replicasStr, ok := prometheus.Annotations[ReplicaStorageNetworkAnnotation]; ok {
+		logrus.Infof("current prometheus replicas: %v", *prometheus.Spec.Replicas)
 		logrus.Infof("start prometheus")
 		prometheusCopy := prometheus.DeepCopy()
-		*prometheusCopy.Spec.Replicas = 1
-		if replicas, err := strconv.Atoi(prometheus.Annotations[ReplicaStorageNetworkAnnotation]); err == nil {
+		// ignore error, and keep original replica
+		if replicas, err := strconv.Atoi(replicasStr); err == nil {
 			*prometheusCopy.Spec.Replicas = int32(replicas)
 		}
 		delete(prometheusCopy.Annotations, ReplicaStorageNetworkAnnotation)
@@ -466,6 +466,7 @@ func (h *Handler) checkPrometheusStatusAndStart() bool {
 			logrus.Warnf("prometheus update error %v", err)
 			return false
 		}
+		// check status again later
 		return false
 	}
 
@@ -484,13 +485,13 @@ func (h *Handler) checkAltermanagerStatusAndStart() bool {
 		return false
 	}
 
-	logrus.Infof("alertmanager: %v", *alertmanager.Spec.Replicas)
 	// check started or not
-	if *alertmanager.Spec.Replicas == 0 {
+	if replicasStr, ok := alertmanager.Annotations[ReplicaStorageNetworkAnnotation]; ok {
+		logrus.Infof("current alertmanager replicas: %v", *alertmanager.Spec.Replicas)
 		logrus.Infof("start alertmanager")
 		alertmanagerCopy := alertmanager.DeepCopy()
-		*alertmanagerCopy.Spec.Replicas = 1
-		if replicas, err := strconv.Atoi(alertmanager.Annotations[ReplicaStorageNetworkAnnotation]); err == nil {
+		// ignore error, and keep original replica
+		if replicas, err := strconv.Atoi(replicasStr); err == nil {
 			*alertmanagerCopy.Spec.Replicas = int32(replicas)
 		}
 		delete(alertmanagerCopy.Annotations, ReplicaStorageNetworkAnnotation)
@@ -499,6 +500,7 @@ func (h *Handler) checkAltermanagerStatusAndStart() bool {
 			logrus.Warnf("alertmanager update error %v", err)
 			return false
 		}
+		// check status again later
 		return false
 	}
 
@@ -517,13 +519,13 @@ func (h *Handler) checkGrafanaStatusAndStart() bool {
 		return false
 	}
 
-	logrus.Infof("Grafana: %v", *grafana.Spec.Replicas)
 	// check started or not
-	if *grafana.Spec.Replicas == 0 {
+	if replicasStr, ok := grafana.Annotations[ReplicaStorageNetworkAnnotation]; ok {
+		logrus.Infof("current Grafana replicas: %v", *grafana.Spec.Replicas)
 		logrus.Infof("start grafana")
 		grafanaCopy := grafana.DeepCopy()
-		*grafanaCopy.Spec.Replicas = 1
-		if replicas, err := strconv.Atoi(grafana.Annotations[ReplicaStorageNetworkAnnotation]); err == nil {
+		// ignore error, keep original replicas
+		if replicas, err := strconv.Atoi(replicasStr); err == nil {
 			*grafanaCopy.Spec.Replicas = int32(replicas)
 		}
 		delete(grafanaCopy.Annotations, ReplicaStorageNetworkAnnotation)
@@ -532,6 +534,7 @@ func (h *Handler) checkGrafanaStatusAndStart() bool {
 			logrus.Warnf("Grafana update error %v", err)
 			return false
 		}
+		// check status again later
 		return false
 	}
 
@@ -550,9 +553,9 @@ func (h *Handler) checkRancherMonitoringStatusAndStart() bool {
 		return false
 	}
 
-	logrus.Infof("Rancher Monitoring: %v", monitoring.Spec.Paused)
 	// check pause or not
-	if monitoring.Spec.Paused {
+	if _, ok := monitoring.Annotations[PausedStorageNetworkAnnotation]; ok {
+		logrus.Infof("current Rancher Monitoring paused: %v", monitoring.Spec.Paused)
 		logrus.Infof("start rancher monitoring")
 		monitoringCopy := monitoring.DeepCopy()
 		monitoringCopy.Spec.Paused = false
@@ -562,6 +565,7 @@ func (h *Handler) checkRancherMonitoringStatusAndStart() bool {
 			logrus.Warnf("rancher monitoring error %v", err)
 			return false
 		}
+		// check status again later
 		return false
 	}
 
@@ -580,13 +584,13 @@ func (h *Handler) checkVMImportControllerStatusAndStart() bool {
 		return false
 	}
 
-	logrus.Infof("VM Import Controller: %v", *vmimportcontroller.Spec.Replicas)
+	logrus.Infof("current VM Import Controller replicas: %v", *vmimportcontroller.Spec.Replicas)
 	// check started or not
-	if *vmimportcontroller.Spec.Replicas == 0 {
+	if replicasStr, ok := vmimportcontroller.Annotations[ReplicaStorageNetworkAnnotation]; ok {
 		logrus.Infof("start vm import controller")
 		vmimportcontrollerCopy := vmimportcontroller.DeepCopy()
-		*vmimportcontrollerCopy.Spec.Replicas = 1
-		if replicas, err := strconv.Atoi(vmimportcontroller.Annotations[ReplicaStorageNetworkAnnotation]); err == nil {
+		// ignore error, keep original replicas
+		if replicas, err := strconv.Atoi(replicasStr); err == nil {
 			*vmimportcontrollerCopy.Spec.Replicas = int32(replicas)
 		}
 		delete(vmimportcontrollerCopy.Annotations, ReplicaStorageNetworkAnnotation)
@@ -595,6 +599,7 @@ func (h *Handler) checkVMImportControllerStatusAndStart() bool {
 			logrus.Warnf("VM Import Controller update error %v", err)
 			return false
 		}
+		// check status again later
 		return false
 	}
 
@@ -640,9 +645,9 @@ func (h *Handler) checkRancherMonitoringStatusAndStop() bool {
 		return false
 	}
 
-	logrus.Infof("Rancher Monitoring: %v", monitoring.Spec.Paused)
 	// check pause or not
 	if !monitoring.Spec.Paused {
+		logrus.Infof("current Rancher Monitoring paused: %v", monitoring.Spec.Paused)
 		logrus.Infof("stop rancher monitoring")
 		monitoringCopy := monitoring.DeepCopy()
 		monitoringCopy.Annotations[PausedStorageNetworkAnnotation] = "false"
@@ -652,6 +657,7 @@ func (h *Handler) checkRancherMonitoringStatusAndStop() bool {
 			logrus.Warnf("rancher monitoring error %v", err)
 			return false
 		}
+		// check status again later
 		return false
 	}
 
@@ -669,9 +675,9 @@ func (h *Handler) checkPrometheusStatusAndStop() bool {
 		logrus.Warnf("prometheus get error %v", err)
 		return false
 	}
-	logrus.Infof("prometheus: %v", *prometheus.Spec.Replicas)
 	// check stopped or not
 	if *prometheus.Spec.Replicas != 0 {
+		logrus.Infof("current prometheus replicas: %v", *prometheus.Spec.Replicas)
 		logrus.Infof("stop prometheus")
 		prometheusCopy := prometheus.DeepCopy()
 		prometheusCopy.Annotations[ReplicaStorageNetworkAnnotation] = strconv.Itoa(int(*prometheus.Spec.Replicas))
@@ -681,6 +687,7 @@ func (h *Handler) checkPrometheusStatusAndStop() bool {
 			logrus.Warnf("prometheus update error %v", err)
 			return false
 		}
+		// check status again later
 		return false
 	}
 
@@ -699,9 +706,9 @@ func (h *Handler) checkAltermanagerStatusAndStop() bool {
 		return false
 	}
 
-	logrus.Infof("alertmanager: %v", *alertmanager.Spec.Replicas)
 	// check stopped or not
 	if *alertmanager.Spec.Replicas != 0 {
+		logrus.Infof("current alertmanager replicas: %v", *alertmanager.Spec.Replicas)
 		logrus.Infof("stop alertmanager")
 		alertmanagerCopy := alertmanager.DeepCopy()
 		alertmanagerCopy.Annotations[ReplicaStorageNetworkAnnotation] = strconv.Itoa(int(*alertmanager.Spec.Replicas))
@@ -711,6 +718,7 @@ func (h *Handler) checkAltermanagerStatusAndStop() bool {
 			logrus.Warnf("alertmanager update error %v", err)
 			return false
 		}
+		// check status again later
 		return false
 	}
 
@@ -729,7 +737,7 @@ func (h *Handler) checkGrafanaStatusAndStop() bool {
 		return false
 	}
 
-	logrus.Infof("Grafana: %v", *grafana.Spec.Replicas)
+	logrus.Infof("current Grafana replicas: %v", *grafana.Spec.Replicas)
 	// check stopped or not
 	if *grafana.Spec.Replicas != 0 {
 		logrus.Infof("stop grafana")
@@ -741,6 +749,7 @@ func (h *Handler) checkGrafanaStatusAndStop() bool {
 			logrus.Warnf("Grafana update error %v", err)
 			return false
 		}
+		// check status again later
 		return false
 	}
 
@@ -759,9 +768,9 @@ func (h *Handler) checkVMImportControllerStatusAndStop() bool {
 		return false
 	}
 
-	logrus.Infof("VM Import Controller: %v", *vmimportcontroller.Spec.Replicas)
 	// check stopped or not
 	if *vmimportcontroller.Spec.Replicas != 0 {
+		logrus.Infof("current VM Import Controller replicas: %v", *vmimportcontroller.Spec.Replicas)
 		logrus.Infof("stop vmi import controller")
 		vmimportcontrollerCopy := vmimportcontroller.DeepCopy()
 		vmimportcontrollerCopy.Annotations[ReplicaStorageNetworkAnnotation] = strconv.Itoa(int(*vmimportcontroller.Spec.Replicas))
@@ -771,6 +780,7 @@ func (h *Handler) checkVMImportControllerStatusAndStop() bool {
 			logrus.Warnf("VM Import Controller update error %v", err)
 			return false
 		}
+		// check status again later
 		return false
 	}
 

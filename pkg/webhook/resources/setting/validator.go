@@ -617,7 +617,7 @@ func (v *settingValidator) validateUpdateStorageNetwork(oldSetting *v1beta1.Sett
 }
 
 func (v *settingValidator) validateDeleteStorageNetwork(setting *v1beta1.Setting) error {
-	return werror.NewMethodNotAllowed(fmt.Sprintf("Disallow delete setting named %s", settings.StorageNetworkName))
+	return werror.NewMethodNotAllowed(fmt.Sprintf("Disallow delete setting name %s", settings.StorageNetworkName))
 }
 
 func (v *settingValidator) checkStorageNetworkValueVaild(setting *v1beta1.Setting) error {
