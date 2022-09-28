@@ -601,10 +601,6 @@ func (v *settingValidator) validateStorageNetwork(setting *v1beta1.Setting) erro
 }
 
 func (v *settingValidator) validateUpdateStorageNetwork(oldSetting *v1beta1.Setting, newSetting *v1beta1.Setting) error {
-	if oldSetting.Name == settings.StorageNetworkName && newSetting.Name != settings.StorageNetworkName {
-		return werror.NewInvalidError("Do not change storage-network name to other", "name")
-	}
-
 	if newSetting.Name != settings.StorageNetworkName {
 		return nil
 	}
@@ -643,7 +639,7 @@ func (v *settingValidator) checkStorageNetworkValueVaild(setting *v1beta1.Settin
 		return err
 	}
 	if len(vmis) > 0 {
-		return werror.NewInvalidError("Please stop all VMs/VMIs before setting storage-network", "value")
+		return werror.NewInvalidError("Please stop all VMs before configuring the storage-network setting", "value")
 	}
 
 	return nil
@@ -651,14 +647,13 @@ func (v *settingValidator) checkStorageNetworkValueVaild(setting *v1beta1.Settin
 
 func (v *settingValidator) checkStorageNetworkVlanValid(config *storagenetworkctl.Config) error {
 	if config.Vlan < 1 || config.Vlan > 4094 {
-		return fmt.Errorf("VLAN should be 1~4094")
+		return fmt.Errorf("The valid value range for VLAN IDs is 1 to 4094")
 	}
 	return nil
 }
 
 func (v *settingValidator) checkStorageNetworkRangeValid(config *storagenetworkctl.Config) error {
-	networkRange := config.Range
-	ip, network, err := net.ParseCIDR(networkRange)
+	ip, network, err := net.ParseCIDR(config.Range)
 	if err != nil {
 		return err
 	}
