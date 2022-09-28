@@ -215,21 +215,21 @@ func (h *Handler) OnStorageNetworkChange(key string, setting *harvesterv1.Settin
 	if !h.checkPodStatusAndStop() {
 		logrus.Infof("Requeue to check pod status again")
 		if _, err := h.setConfiguredCondition(settingCopy, false, ReasonInProgress, MsgStopPod); err != nil {
-			logrus.Warnf("update status error %v", err)
+			logrus.Errorf("update status error %v", err)
 		}
 		h.settingsController.EnqueueAfter(settingCopy.Name, 5*time.Second)
 		return nil, nil
 	}
 
 	// check volume detach before put LH settings
-	if ok, err := h.checkLonghornVolumeDetach(); !ok {
+	if ok, err := h.checkLonghornVolumeDetached(); !ok {
 		if err != nil {
 			// log error only but not return error to controller
-			logrus.Warnf("check Longhorn volume error: %v", err)
+			logrus.Errorf("check Longhorn volume error: %v", err)
 		}
 		logrus.Infof("still has attached volume")
 		if _, err := h.setConfiguredCondition(settingCopy, false, ReasonInProgress, MsgWaitForVolumes); err != nil {
-			logrus.Warnf("update status error %v", err)
+			logrus.Errorf("update status error %v", err)
 		}
 		h.settingsController.EnqueueAfter(settingCopy.Name, 5*time.Second)
 		return nil, nil
@@ -241,10 +241,10 @@ func (h *Handler) OnStorageNetworkChange(key string, setting *harvesterv1.Settin
 	// push LH setting
 	nadName := settingCopy.Annotations[NadStorageNetworkAnnotation]
 	if err := h.updateLonghornStorageNetwork(nadName); err != nil {
-		logrus.Warnf("Update Longhorn setting error %v", err)
+		logrus.Errorf("Update Longhorn setting error %v", err)
 	}
 	if _, err := h.setConfiguredCondition(settingCopy, false, ReasonInProgress, MsgUpdateLonghornSetting); err != nil {
-		logrus.Warnf("update status error %v", err)
+		logrus.Errorf("update status error %v", err)
 	}
 	h.settingsController.EnqueueAfter(settingCopy.Name, 5*time.Second)
 
@@ -274,7 +274,7 @@ func (h *Handler) createAndSaveNad(setting *harvesterv1.Setting) error {
 	bridgeConfig := NewBridgeConfig()
 
 	if err := json.Unmarshal([]byte(setting.Value), &config); err != nil {
-		logrus.Warnf("parsing value error %v", err)
+		logrus.Errorf("parsing value error %v", err)
 		return err
 	}
 
@@ -292,7 +292,7 @@ func (h *Handler) createAndSaveNad(setting *harvesterv1.Setting) error {
 
 	nadConfig, err := json.Marshal(bridgeConfig)
 	if err != nil {
-		logrus.Warnf("output json error %v", err)
+		logrus.Errorf("output json error %v", err)
 		return err
 	}
 
@@ -310,7 +310,7 @@ func (h *Handler) createAndSaveNad(setting *harvesterv1.Setting) error {
 
 	// create nad
 	if _, err := h.networkAttachmentDefinitions.Create(&nad); err != nil {
-		logrus.Warnf("create net-attach-def failed %v", err)
+		logrus.Errorf("create net-attach-def failed %v", err)
 		return err
 	}
 
@@ -329,7 +329,7 @@ func (h *Handler) checkChange(setting *harvesterv1.Setting) (bool, error) {
 			h.saveHash(setting)
 
 			if _, err := h.setConfiguredCondition(setting, false, ReasonInProgress, "enqueue"); err != nil {
-				logrus.Warnf("reset update status error %v", err)
+				logrus.Errorf("reset update status error %v", err)
 			}
 			h.settingsController.Enqueue(setting.Name)
 			return false, nil
@@ -341,7 +341,7 @@ func (h *Handler) checkChange(setting *harvesterv1.Setting) (bool, error) {
 			h.saveHash(setting)
 
 			if _, err := h.setConfiguredCondition(setting, false, ReasonInProgress, "create nad"); err != nil {
-				logrus.Warnf("create nad update status error %v", err)
+				logrus.Errorf("create nad update status error %v", err)
 			}
 			h.settingsController.Enqueue(setting.Name)
 			return false, nil
@@ -359,7 +359,7 @@ func (h *Handler) removeOldNad(setting *harvesterv1.Setting) error {
 	nadName := strings.Split(oldNad, "/")
 	if len(nadName) != 2 {
 		// ignore this error and skip
-		logrus.Warnf("split nad namespace and name failed %s", oldNad)
+		logrus.Errorf("split nad namespace and name failed %s", oldNad)
 		setting.Annotations[OldNadStorageNetworkAnnotation] = ""
 		return nil
 	}
@@ -373,12 +373,12 @@ func (h *Handler) removeOldNad(setting *harvesterv1.Setting) error {
 		}
 
 		// retry again
-		logrus.Warnf("check net-attach-def existing error %v", err)
+		logrus.Errorf("check net-attach-def existing error %v", err)
 		return err
 	}
 
 	if err := h.networkAttachmentDefinitions.Delete(namespace, name, &metav1.DeleteOptions{}); err != nil {
-		logrus.Warnf("remove nad error %v", err)
+		logrus.Errorf("remove nad error %v", err)
 		return err
 	}
 
@@ -390,7 +390,7 @@ func (h *Handler) removeOldNad(setting *harvesterv1.Setting) error {
 func (h *Handler) checkLonghornSetting(setting *harvesterv1.Setting) bool {
 	value, err := h.getLonghornStorageNetwork()
 	if err != nil {
-		logrus.Warnf("get Longhorn settings error: %v", err)
+		logrus.Errorf("get Longhorn settings error: %v", err)
 		return false
 	}
 
@@ -399,7 +399,7 @@ func (h *Handler) checkLonghornSetting(setting *harvesterv1.Setting) bool {
 		// check if we need to restart monitoring pods
 		if !h.checkPodStatusAndStart() {
 			if _, err := h.setConfiguredCondition(setting, false, ReasonInProgress, MsgRestartPod); err != nil {
-				logrus.Warnf("update status error %v", err)
+				logrus.Errorf("update status error %v", err)
 			}
 			h.settingsController.EnqueueAfter(setting.Name, 5*time.Second)
 			return true
@@ -407,14 +407,14 @@ func (h *Handler) checkLonghornSetting(setting *harvesterv1.Setting) bool {
 
 		settingCopy := setting.DeepCopy()
 		if err := h.removeOldNad(settingCopy); err != nil {
-			logrus.Warnf("remove old nad error %v", err)
+			logrus.Errorf("remove old nad error %v", err)
 			h.settingsController.EnqueueAfter(setting.Name, 5*time.Second)
 			return true
 		}
 
 		// finish
 		if _, err := h.setConfiguredCondition(settingCopy, true, ReasonCompleted, ""); err != nil {
-			logrus.Warnf("update status error %v", err)
+			logrus.Errorf("update status error %v", err)
 		}
 		return true
 	}
@@ -422,10 +422,10 @@ func (h *Handler) checkLonghornSetting(setting *harvesterv1.Setting) bool {
 }
 
 // true: all detach
-func (h *Handler) checkLonghornVolumeDetach() (bool, error) {
+func (h *Handler) checkLonghornVolumeDetached() (bool, error) {
 	volumes, err := h.longhornVolumeCache.List(util.LonghornSystemNamespaceName, labels.Everything())
 	if err != nil {
-		logrus.Warnf("volume error %v", err)
+		logrus.Errorf("volume error %v", err)
 		return false, err
 	}
 
@@ -446,7 +446,7 @@ func (h *Handler) checkPrometheusStatusAndStart() bool {
 			logrus.Infof("prometheus not found. skip")
 			return true
 		}
-		logrus.Warnf("prometheus get error %v", err)
+		logrus.Errorf("prometheus get error %v", err)
 		return false
 	}
 
@@ -462,7 +462,7 @@ func (h *Handler) checkPrometheusStatusAndStart() bool {
 		delete(prometheusCopy.Annotations, ReplicaStorageNetworkAnnotation)
 
 		if _, err := h.prometheus.Update(prometheusCopy); err != nil {
-			logrus.Warnf("prometheus update error %v", err)
+			logrus.Errorf("prometheus update error %v", err)
 			return false
 		}
 		return true
@@ -479,7 +479,7 @@ func (h *Handler) checkAltermanagerStatusAndStart() bool {
 			logrus.Infof("Alertmanager not found. skip")
 			return true
 		}
-		logrus.Warnf("alertmanager get error %v", err)
+		logrus.Errorf("alertmanager get error %v", err)
 		return false
 	}
 
@@ -495,7 +495,7 @@ func (h *Handler) checkAltermanagerStatusAndStart() bool {
 		delete(alertmanagerCopy.Annotations, ReplicaStorageNetworkAnnotation)
 
 		if _, err := h.alertmanager.Update(alertmanagerCopy); err != nil {
-			logrus.Warnf("alertmanager update error %v", err)
+			logrus.Errorf("alertmanager update error %v", err)
 			return false
 		}
 		return true
@@ -512,7 +512,7 @@ func (h *Handler) checkGrafanaStatusAndStart() bool {
 			logrus.Infof("grafana not found. skip")
 			return true
 		}
-		logrus.Warnf("grafana get error %v", err)
+		logrus.Errorf("grafana get error %v", err)
 		return false
 	}
 
@@ -528,7 +528,7 @@ func (h *Handler) checkGrafanaStatusAndStart() bool {
 		delete(grafanaCopy.Annotations, ReplicaStorageNetworkAnnotation)
 
 		if _, err := h.deployments.Update(grafanaCopy); err != nil {
-			logrus.Warnf("Grafana update error %v", err)
+			logrus.Errorf("Grafana update error %v", err)
 			return false
 		}
 		return true
@@ -545,7 +545,7 @@ func (h *Handler) checkRancherMonitoringStatusAndStart() bool {
 			logrus.Infof("rancher monitoring not found. skip")
 			return true
 		}
-		logrus.Warnf("rancher monitoring get error %v", err)
+		logrus.Errorf("rancher monitoring get error %v", err)
 		return false
 	}
 
@@ -558,7 +558,7 @@ func (h *Handler) checkRancherMonitoringStatusAndStart() bool {
 		delete(monitoringCopy.Annotations, PausedStorageNetworkAnnotation)
 
 		if _, err := h.managedCharts.Update(monitoringCopy); err != nil {
-			logrus.Warnf("rancher monitoring error %v", err)
+			logrus.Errorf("rancher monitoring error %v", err)
 			return false
 		}
 		return true
@@ -575,7 +575,7 @@ func (h *Handler) checkVMImportControllerStatusAndStart() bool {
 			logrus.Infof("VM import controller not found. skip")
 			return true
 		}
-		logrus.Warnf("vm import controller get error %v", err)
+		logrus.Errorf("vm import controller get error %v", err)
 		return false
 	}
 
@@ -591,7 +591,7 @@ func (h *Handler) checkVMImportControllerStatusAndStart() bool {
 		delete(vmimportcontrollerCopy.Annotations, ReplicaStorageNetworkAnnotation)
 
 		if _, err := h.deployments.Update(vmimportcontrollerCopy); err != nil {
-			logrus.Warnf("VM Import Controller update error %v", err)
+			logrus.Errorf("VM Import Controller update error %v", err)
 			return false
 		}
 		return true
@@ -635,7 +635,7 @@ func (h *Handler) checkRancherMonitoringStatusAndStop() bool {
 			logrus.Infof("rancher monitoring not found. skip")
 			return true
 		}
-		logrus.Warnf("rancher monitoring get error %v", err)
+		logrus.Errorf("rancher monitoring get error %v", err)
 		return false
 	}
 
@@ -648,7 +648,7 @@ func (h *Handler) checkRancherMonitoringStatusAndStop() bool {
 		monitoringCopy.Spec.Paused = true
 
 		if _, err := h.managedCharts.Update(monitoringCopy); err != nil {
-			logrus.Warnf("rancher monitoring error %v", err)
+			logrus.Errorf("rancher monitoring error %v", err)
 			return false
 		}
 		return true
@@ -665,7 +665,7 @@ func (h *Handler) checkPrometheusStatusAndStop() bool {
 			logrus.Infof("prometheus not found. skip")
 			return true
 		}
-		logrus.Warnf("prometheus get error %v", err)
+		logrus.Errorf("prometheus get error %v", err)
 		return false
 	}
 	// check stopped or not
@@ -677,7 +677,7 @@ func (h *Handler) checkPrometheusStatusAndStop() bool {
 		*prometheusCopy.Spec.Replicas = 0
 
 		if _, err := h.prometheus.Update(prometheusCopy); err != nil {
-			logrus.Warnf("prometheus update error %v", err)
+			logrus.Errorf("prometheus update error %v", err)
 			return false
 		}
 		return true
@@ -694,7 +694,7 @@ func (h *Handler) checkAltermanagerStatusAndStop() bool {
 			logrus.Infof("Alertmanager not found. skip")
 			return true
 		}
-		logrus.Warnf("alertmanager get error %v", err)
+		logrus.Errorf("alertmanager get error %v", err)
 		return false
 	}
 
@@ -707,7 +707,7 @@ func (h *Handler) checkAltermanagerStatusAndStop() bool {
 		*alertmanagerCopy.Spec.Replicas = 0
 
 		if _, err := h.alertmanager.Update(alertmanagerCopy); err != nil {
-			logrus.Warnf("alertmanager update error %v", err)
+			logrus.Errorf("alertmanager update error %v", err)
 			return false
 		}
 		return true
@@ -724,7 +724,7 @@ func (h *Handler) checkGrafanaStatusAndStop() bool {
 			logrus.Infof("grafana no found. skip")
 			return true
 		}
-		logrus.Warnf("grafana get error %v", err)
+		logrus.Errorf("grafana get error %v", err)
 		return false
 	}
 
@@ -737,7 +737,7 @@ func (h *Handler) checkGrafanaStatusAndStop() bool {
 		*grafanaCopy.Spec.Replicas = 0
 
 		if _, err := h.deployments.Update(grafanaCopy); err != nil {
-			logrus.Warnf("Grafana update error %v", err)
+			logrus.Errorf("Grafana update error %v", err)
 			return false
 		}
 		return true
@@ -754,7 +754,7 @@ func (h *Handler) checkVMImportControllerStatusAndStop() bool {
 			logrus.Infof("VM import controller no found. skip")
 			return true
 		}
-		logrus.Warnf("vmimportcontroller get error %v", err)
+		logrus.Errorf("vmimportcontroller get error %v", err)
 		return false
 	}
 
@@ -767,7 +767,7 @@ func (h *Handler) checkVMImportControllerStatusAndStop() bool {
 		*vmimportcontrollerCopy.Spec.Replicas = 0
 
 		if _, err := h.deployments.Update(vmimportcontrollerCopy); err != nil {
-			logrus.Warnf("VM Import Controller update error %v", err)
+			logrus.Errorf("VM Import Controller update error %v", err)
 			return false
 		}
 		return true
