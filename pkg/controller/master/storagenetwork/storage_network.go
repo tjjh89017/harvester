@@ -465,8 +465,7 @@ func (h *Handler) checkPrometheusStatusAndStart() bool {
 			logrus.Warnf("prometheus update error %v", err)
 			return false
 		}
-		// check status again later
-		return false
+		return true
 	}
 
 	return true
@@ -499,8 +498,7 @@ func (h *Handler) checkAltermanagerStatusAndStart() bool {
 			logrus.Warnf("alertmanager update error %v", err)
 			return false
 		}
-		// check status again later
-		return false
+		return true
 	}
 
 	return true
@@ -533,8 +531,7 @@ func (h *Handler) checkGrafanaStatusAndStart() bool {
 			logrus.Warnf("Grafana update error %v", err)
 			return false
 		}
-		// check status again later
-		return false
+		return true
 	}
 
 	return true
@@ -564,8 +561,7 @@ func (h *Handler) checkRancherMonitoringStatusAndStart() bool {
 			logrus.Warnf("rancher monitoring error %v", err)
 			return false
 		}
-		// check status again later
-		return false
+		return true
 	}
 
 	return true
@@ -598,8 +594,7 @@ func (h *Handler) checkVMImportControllerStatusAndStart() bool {
 			logrus.Warnf("VM Import Controller update error %v", err)
 			return false
 		}
-		// check status again later
-		return false
+		return true
 	}
 
 	return true
@@ -656,8 +651,7 @@ func (h *Handler) checkRancherMonitoringStatusAndStop() bool {
 			logrus.Warnf("rancher monitoring error %v", err)
 			return false
 		}
-		// check status again later
-		return false
+		return true
 	}
 
 	return true
@@ -686,8 +680,7 @@ func (h *Handler) checkPrometheusStatusAndStop() bool {
 			logrus.Warnf("prometheus update error %v", err)
 			return false
 		}
-		// check status again later
-		return false
+		return true
 	}
 
 	return true
@@ -717,8 +710,7 @@ func (h *Handler) checkAltermanagerStatusAndStop() bool {
 			logrus.Warnf("alertmanager update error %v", err)
 			return false
 		}
-		// check status again later
-		return false
+		return true
 	}
 
 	return true
@@ -748,8 +740,7 @@ func (h *Handler) checkGrafanaStatusAndStop() bool {
 			logrus.Warnf("Grafana update error %v", err)
 			return false
 		}
-		// check status again later
-		return false
+		return true
 	}
 
 	return true
@@ -779,8 +770,7 @@ func (h *Handler) checkVMImportControllerStatusAndStop() bool {
 			logrus.Warnf("VM Import Controller update error %v", err)
 			return false
 		}
-		// check status again later
-		return false
+		return true
 	}
 
 	return true
