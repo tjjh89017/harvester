@@ -4,11 +4,11 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"strconv"
 	"strings"
-	"time"
 
 	cniv1 "github.com/containernetworking/cni/pkg/types"
 	nadv1 "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/apis/k8s.cni.cncf.io/v1"
@@ -68,7 +68,7 @@ const (
 
 	// VM import controller
 	HarvesterSystemNamespace    = "harvester-system"
-	HarvesterVMImportController = "harvester-harvester-vm-import-controller"
+	HarvesterVMImportController = "vm-import-controller-harvester-vm-import-controller"
 )
 
 type Config struct {
@@ -202,9 +202,10 @@ func (h *Handler) OnStorageNetworkChange(key string, setting *harvesterv1.Settin
 		return nil, err
 	}
 
-	if h.checkLonghornSetting(settingCopy) {
-		// finish
-		return nil, nil
+	if earlyReturn, err := h.checkLonghornSetting(settingCopy); earlyReturn {
+		// err == nil, finish
+		// err != nil, reconcile
+		return nil, err
 	}
 
 	logrus.Infof("storage network change: %s", settingCopy.Value)
@@ -212,27 +213,27 @@ func (h *Handler) OnStorageNetworkChange(key string, setting *harvesterv1.Settin
 	// if replica eq 0, skip
 	// save replica to annotation
 	// set replica to 0
-	if !h.checkPodStatusAndStop() {
+	if err := h.checkPodStatusAndStop(); err != nil {
 		logrus.Infof("Requeue to check pod status again")
-		if _, err := h.setConfiguredCondition(settingCopy, false, ReasonInProgress, MsgStopPod); err != nil {
-			logrus.Errorf("update status error %v", err)
+		if _, updateConditionErr := h.setConfiguredCondition(settingCopy, false, ReasonInProgress, MsgStopPod); updateConditionErr != nil {
+			logrus.Errorf("update status error %v", updateConditionErr)
+			return nil, updateConditionErr
 		}
-		h.settingsController.EnqueueAfter(settingCopy.Name, 5*time.Second)
-		return nil, nil
+		return nil, err
 	}
 
 	// check volume detach before put LH settings
 	if ok, err := h.checkLonghornVolumeDetached(); !ok {
 		if err != nil {
-			// log error only but not return error to controller
 			logrus.Errorf("check Longhorn volume error: %v", err)
+			return nil, err
 		}
 		logrus.Infof("still has attached volume")
-		if _, err := h.setConfiguredCondition(settingCopy, false, ReasonInProgress, MsgWaitForVolumes); err != nil {
-			logrus.Errorf("update status error %v", err)
+		if _, updateConditionErr := h.setConfiguredCondition(settingCopy, false, ReasonInProgress, MsgWaitForVolumes); updateConditionErr != nil {
+			logrus.Errorf("update status error %v", updateConditionErr)
+			return nil, updateConditionErr
 		}
-		h.settingsController.EnqueueAfter(settingCopy.Name, 5*time.Second)
-		return nil, nil
+		return nil, errors.New("Check Longhorn Volume status again, requeue")
 	}
 
 	logrus.Infof("all pods are stopped")
@@ -242,13 +243,14 @@ func (h *Handler) OnStorageNetworkChange(key string, setting *harvesterv1.Settin
 	nadName := settingCopy.Annotations[NadStorageNetworkAnnotation]
 	if err := h.updateLonghornStorageNetwork(nadName); err != nil {
 		logrus.Errorf("Update Longhorn setting error %v", err)
+		return nil, err
 	}
 	if _, err := h.setConfiguredCondition(settingCopy, false, ReasonInProgress, MsgUpdateLonghornSetting); err != nil {
 		logrus.Errorf("update status error %v", err)
+		return nil, err
 	}
-	h.settingsController.EnqueueAfter(settingCopy.Name, 5*time.Second)
 
-	return nil, nil
+	return nil, errors.New("Recheck Longhorn Setting and restart Pods.")
 }
 
 // calc sha1 hash
@@ -296,11 +298,10 @@ func (h *Handler) createAndSaveNad(setting *harvesterv1.Setting) error {
 		return err
 	}
 
-	currentHash := h.sha1(setting.Value)
 	nad := nadv1.NetworkAttachmentDefinition{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      StorageNetworkNetAttachDefPrefix + currentHash,
-			Namespace: StorageNetworkNetAttachDefNamespace,
+			GenerateName: StorageNetworkNetAttachDefPrefix,
+			Namespace:    StorageNetworkNetAttachDefNamespace,
 		},
 	}
 	nad.Annotations = map[string]string{
@@ -309,14 +310,15 @@ func (h *Handler) createAndSaveNad(setting *harvesterv1.Setting) error {
 	nad.Spec.Config = string(nadConfig)
 
 	// create nad
-	if _, err := h.networkAttachmentDefinitions.Create(&nad); err != nil {
+	var nadResult *nadv1.NetworkAttachmentDefinition
+	if nadResult, err = h.networkAttachmentDefinitions.Create(&nad); err != nil {
 		logrus.Errorf("create net-attach-def failed %v", err)
 		return err
 	}
 
 	// save nad name
 	setting.Annotations[OldNadStorageNetworkAnnotation] = setting.Annotations[NadStorageNetworkAnnotation]
-	setting.Annotations[NadStorageNetworkAnnotation] = nad.Namespace + "/" + nad.Name
+	setting.Annotations[NadStorageNetworkAnnotation] = nadResult.Namespace + "/" + nadResult.Name
 
 	return nil
 }
@@ -330,9 +332,9 @@ func (h *Handler) checkChange(setting *harvesterv1.Setting) (bool, error) {
 
 			if _, err := h.setConfiguredCondition(setting, false, ReasonInProgress, "enqueue"); err != nil {
 				logrus.Errorf("reset update status error %v", err)
+				return false, err
 			}
-			h.settingsController.Enqueue(setting.Name)
-			return false, nil
+			return false, errors.New("check hash again")
 		} else {
 			if err := h.createAndSaveNad(setting); err != nil {
 				return false, err
@@ -342,9 +344,9 @@ func (h *Handler) checkChange(setting *harvesterv1.Setting) (bool, error) {
 
 			if _, err := h.setConfiguredCondition(setting, false, ReasonInProgress, "create nad"); err != nil {
 				logrus.Errorf("create nad update status error %v", err)
+				return false, err
 			}
-			h.settingsController.Enqueue(setting.Name)
-			return false, nil
+			return false, errors.New("check hash again")
 		}
 	}
 	return true, nil
@@ -358,7 +360,6 @@ func (h *Handler) removeOldNad(setting *harvesterv1.Setting) error {
 
 	nadName := strings.Split(oldNad, "/")
 	if len(nadName) != 2 {
-		// ignore this error and skip
 		logrus.Errorf("split nad namespace and name failed %s", oldNad)
 		setting.Annotations[OldNadStorageNetworkAnnotation] = ""
 		return nil
@@ -386,39 +387,41 @@ func (h *Handler) removeOldNad(setting *harvesterv1.Setting) error {
 	return nil
 }
 
-// return true as finished
-func (h *Handler) checkLonghornSetting(setting *harvesterv1.Setting) bool {
+// earlyReturn bool
+// err, reconcile
+func (h *Handler) checkLonghornSetting(setting *harvesterv1.Setting) (bool, error) {
 	value, err := h.getLonghornStorageNetwork()
 	if err != nil {
 		logrus.Errorf("get Longhorn settings error: %v", err)
-		return false
+		return true, err
 	}
 
 	currentNad := setting.Annotations[NadStorageNetworkAnnotation]
 	if currentNad == value {
 		// check if we need to restart monitoring pods
-		if !h.checkPodStatusAndStart() {
-			if _, err := h.setConfiguredCondition(setting, false, ReasonInProgress, MsgRestartPod); err != nil {
-				logrus.Errorf("update status error %v", err)
+		if err := h.checkPodStatusAndStart(); err != nil {
+			if _, updateConditionErr := h.setConfiguredCondition(setting, false, ReasonInProgress, MsgRestartPod); updateConditionErr != nil {
+				logrus.Errorf("update status error %v", updateConditionErr)
+				return true, updateConditionErr
 			}
-			h.settingsController.EnqueueAfter(setting.Name, 5*time.Second)
-			return true
+			return true, err
 		}
 
 		settingCopy := setting.DeepCopy()
 		if err := h.removeOldNad(settingCopy); err != nil {
 			logrus.Errorf("remove old nad error %v", err)
-			h.settingsController.EnqueueAfter(setting.Name, 5*time.Second)
-			return true
+			return true, err
 		}
 
 		// finish
 		if _, err := h.setConfiguredCondition(settingCopy, true, ReasonCompleted, ""); err != nil {
 			logrus.Errorf("update status error %v", err)
+			return true, err
 		}
-		return true
+		// early return but no error, finish
+		return true, nil
 	}
-	return false
+	return false, nil
 }
 
 // true: all detach
@@ -438,16 +441,16 @@ func (h *Handler) checkLonghornVolumeDetached() (bool, error) {
 	return true, nil
 }
 
-func (h *Handler) checkPrometheusStatusAndStart() bool {
+func (h *Handler) checkPrometheusStatusAndStart() error {
 	// check prometheus cattle-monitoring-system/rancher-monitoring-prometheus replica
 	prometheus, err := h.prometheusCache.Get(CattleMonitoringSystemNamespace, RancherMonitoringPrometheus)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			logrus.Infof("prometheus not found. skip")
-			return true
+			return nil
 		}
 		logrus.Errorf("prometheus get error %v", err)
-		return false
+		return err
 	}
 
 	// check started or not
@@ -455,32 +458,34 @@ func (h *Handler) checkPrometheusStatusAndStart() bool {
 		logrus.Infof("current prometheus replicas: %v", *prometheus.Spec.Replicas)
 		logrus.Infof("start prometheus")
 		prometheusCopy := prometheus.DeepCopy()
-		// ignore error, and keep original replica
-		if replicas, err := strconv.Atoi(replicasStr); err == nil {
-			*prometheusCopy.Spec.Replicas = int32(replicas)
+		replicas, err := strconv.Atoi(replicasStr)
+		if err != nil {
+			logrus.Errorf("strconv atoi error %v", err)
+			return err
 		}
+		*prometheusCopy.Spec.Replicas = int32(replicas)
 		delete(prometheusCopy.Annotations, ReplicaStorageNetworkAnnotation)
 
 		if _, err := h.prometheus.Update(prometheusCopy); err != nil {
 			logrus.Errorf("prometheus update error %v", err)
-			return false
+			return err
 		}
-		return true
+		return nil
 	}
 
-	return true
+	return nil
 }
 
-func (h *Handler) checkAltermanagerStatusAndStart() bool {
+func (h *Handler) checkAltermanagerStatusAndStart() error {
 	// check alertmanager cattle-monitoring-system/rancher-monitoring-alertmanager replica
 	alertmanager, err := h.alertmanagerCache.Get(CattleMonitoringSystemNamespace, RancherMonitoringAlertmanager)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			logrus.Infof("Alertmanager not found. skip")
-			return true
+			return nil
 		}
 		logrus.Errorf("alertmanager get error %v", err)
-		return false
+		return err
 	}
 
 	// check started or not
@@ -488,32 +493,34 @@ func (h *Handler) checkAltermanagerStatusAndStart() bool {
 		logrus.Infof("current alertmanager replicas: %v", *alertmanager.Spec.Replicas)
 		logrus.Infof("start alertmanager")
 		alertmanagerCopy := alertmanager.DeepCopy()
-		// ignore error, and keep original replica
-		if replicas, err := strconv.Atoi(replicasStr); err == nil {
-			*alertmanagerCopy.Spec.Replicas = int32(replicas)
+		replicas, err := strconv.Atoi(replicasStr)
+		if err != nil {
+			logrus.Errorf("strconv atoi error %v", err)
+			return err
 		}
+		*alertmanagerCopy.Spec.Replicas = int32(replicas)
 		delete(alertmanagerCopy.Annotations, ReplicaStorageNetworkAnnotation)
 
 		if _, err := h.alertmanager.Update(alertmanagerCopy); err != nil {
 			logrus.Errorf("alertmanager update error %v", err)
-			return false
+			return err
 		}
-		return true
+		return nil
 	}
 
-	return true
+	return nil
 }
 
-func (h *Handler) checkGrafanaStatusAndStart() bool {
+func (h *Handler) checkGrafanaStatusAndStart() error {
 	// check deployment cattle-monitoring-system/rancher-monitoring-grafana replica
 	grafana, err := h.deploymentCache.Get(CattleMonitoringSystemNamespace, RancherMonitoringGrafana)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			logrus.Infof("grafana not found. skip")
-			return true
+			return nil
 		}
 		logrus.Errorf("grafana get error %v", err)
-		return false
+		return err
 	}
 
 	// check started or not
@@ -521,32 +528,34 @@ func (h *Handler) checkGrafanaStatusAndStart() bool {
 		logrus.Infof("current Grafana replicas: %v", *grafana.Spec.Replicas)
 		logrus.Infof("start grafana")
 		grafanaCopy := grafana.DeepCopy()
-		// ignore error, keep original replicas
-		if replicas, err := strconv.Atoi(replicasStr); err == nil {
-			*grafanaCopy.Spec.Replicas = int32(replicas)
+		replicas, err := strconv.Atoi(replicasStr)
+		if err != nil {
+			logrus.Errorf("strconv atoi error %v", err)
+			return err
 		}
+		*grafanaCopy.Spec.Replicas = int32(replicas)
 		delete(grafanaCopy.Annotations, ReplicaStorageNetworkAnnotation)
 
 		if _, err := h.deployments.Update(grafanaCopy); err != nil {
 			logrus.Errorf("Grafana update error %v", err)
-			return false
+			return err
 		}
-		return true
+		return nil
 	}
 
-	return true
+	return nil
 }
 
-func (h *Handler) checkRancherMonitoringStatusAndStart() bool {
+func (h *Handler) checkRancherMonitoringStatusAndStart() error {
 	// check managedchart fleet-local/rancher-monitoring paused
 	monitoring, err := h.managedChartCache.Get(FleetLocalNamespace, RancherMonitoring)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			logrus.Infof("rancher monitoring not found. skip")
-			return true
+			return nil
 		}
 		logrus.Errorf("rancher monitoring get error %v", err)
-		return false
+		return err
 	}
 
 	// check pause or not
@@ -559,24 +568,24 @@ func (h *Handler) checkRancherMonitoringStatusAndStart() bool {
 
 		if _, err := h.managedCharts.Update(monitoringCopy); err != nil {
 			logrus.Errorf("rancher monitoring error %v", err)
-			return false
+			return err
 		}
-		return true
+		return nil
 	}
 
-	return true
+	return nil
 }
 
-func (h *Handler) checkVMImportControllerStatusAndStart() bool {
+func (h *Handler) checkVMImportControllerStatusAndStart() error {
 	// check deployment harvester-system/harvester-harvester-vm-import-controller replica
 	vmimportcontroller, err := h.deploymentCache.Get(HarvesterSystemNamespace, HarvesterVMImportController)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			logrus.Infof("VM import controller not found. skip")
-			return true
+			return nil
 		}
 		logrus.Errorf("vm import controller get error %v", err)
-		return false
+		return err
 	}
 
 	logrus.Infof("current VM Import Controller replicas: %v", *vmimportcontroller.Spec.Replicas)
@@ -584,59 +593,59 @@ func (h *Handler) checkVMImportControllerStatusAndStart() bool {
 	if replicasStr, ok := vmimportcontroller.Annotations[ReplicaStorageNetworkAnnotation]; ok {
 		logrus.Infof("start vm import controller")
 		vmimportcontrollerCopy := vmimportcontroller.DeepCopy()
-		// ignore error, keep original replicas
-		if replicas, err := strconv.Atoi(replicasStr); err == nil {
-			*vmimportcontrollerCopy.Spec.Replicas = int32(replicas)
+		replicas, err := strconv.Atoi(replicasStr)
+		if err != nil {
+			logrus.Errorf("strconv atoi error %v", err)
+			return err
 		}
+		*vmimportcontrollerCopy.Spec.Replicas = int32(replicas)
 		delete(vmimportcontrollerCopy.Annotations, ReplicaStorageNetworkAnnotation)
 
 		if _, err := h.deployments.Update(vmimportcontrollerCopy); err != nil {
 			logrus.Errorf("VM Import Controller update error %v", err)
-			return false
+			return err
 		}
-		return true
+		return nil
 	}
 
-	return true
+	return nil
 }
 
 // check Pod status, if all pods are start, return true
-func (h *Handler) checkPodStatusAndStart() bool {
-	allStarted := true
-
-	if !h.checkPrometheusStatusAndStart() {
-		allStarted = false
+func (h *Handler) checkPodStatusAndStart() error {
+	if err := h.checkPrometheusStatusAndStart(); err != nil {
+		return err
 	}
 
-	if !h.checkAltermanagerStatusAndStart() {
-		allStarted = false
+	if err := h.checkAltermanagerStatusAndStart(); err != nil {
+		return err
 	}
 
-	if !h.checkGrafanaStatusAndStart() {
-		allStarted = false
+	if err := h.checkGrafanaStatusAndStart(); err != nil {
+		return err
 	}
 
-	if !h.checkRancherMonitoringStatusAndStart() {
-		allStarted = false
+	if err := h.checkRancherMonitoringStatusAndStart(); err != nil {
+		return err
 	}
 
-	if !h.checkVMImportControllerStatusAndStart() {
-		allStarted = false
+	if err := h.checkVMImportControllerStatusAndStart(); err != nil {
+		return err
 	}
 
-	return allStarted
+	return nil
 }
 
-func (h *Handler) checkRancherMonitoringStatusAndStop() bool {
+func (h *Handler) checkRancherMonitoringStatusAndStop() error {
 	// check managedchart fleet-local/rancher-monitoring paused
 	monitoring, err := h.managedChartCache.Get(FleetLocalNamespace, RancherMonitoring)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			logrus.Infof("rancher monitoring not found. skip")
-			return true
+			return nil
 		}
 		logrus.Errorf("rancher monitoring get error %v", err)
-		return false
+		return err
 	}
 
 	// check pause or not
@@ -649,24 +658,24 @@ func (h *Handler) checkRancherMonitoringStatusAndStop() bool {
 
 		if _, err := h.managedCharts.Update(monitoringCopy); err != nil {
 			logrus.Errorf("rancher monitoring error %v", err)
-			return false
+			return err
 		}
-		return true
+		return nil
 	}
 
-	return true
+	return err
 }
 
-func (h *Handler) checkPrometheusStatusAndStop() bool {
+func (h *Handler) checkPrometheusStatusAndStop() error {
 	// check prometheus cattle-monitoring-system/rancher-monitoring-prometheus replica
 	prometheus, err := h.prometheusCache.Get(CattleMonitoringSystemNamespace, RancherMonitoringPrometheus)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			logrus.Infof("prometheus not found. skip")
-			return true
+			return nil
 		}
 		logrus.Errorf("prometheus get error %v", err)
-		return false
+		return err
 	}
 	// check stopped or not
 	if *prometheus.Spec.Replicas != 0 {
@@ -678,24 +687,24 @@ func (h *Handler) checkPrometheusStatusAndStop() bool {
 
 		if _, err := h.prometheus.Update(prometheusCopy); err != nil {
 			logrus.Errorf("prometheus update error %v", err)
-			return false
+			return err
 		}
-		return true
+		return nil
 	}
 
-	return true
+	return nil
 }
 
-func (h *Handler) checkAltermanagerStatusAndStop() bool {
+func (h *Handler) checkAltermanagerStatusAndStop() error {
 	// check alertmanager cattle-monitoring-system/rancher-monitoring-alertmanager replica
 	alertmanager, err := h.alertmanagerCache.Get(CattleMonitoringSystemNamespace, RancherMonitoringAlertmanager)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			logrus.Infof("Alertmanager not found. skip")
-			return true
+			return nil
 		}
 		logrus.Errorf("alertmanager get error %v", err)
-		return false
+		return err
 	}
 
 	// check stopped or not
@@ -708,24 +717,24 @@ func (h *Handler) checkAltermanagerStatusAndStop() bool {
 
 		if _, err := h.alertmanager.Update(alertmanagerCopy); err != nil {
 			logrus.Errorf("alertmanager update error %v", err)
-			return false
+			return err
 		}
-		return true
+		return nil
 	}
 
-	return true
+	return nil
 }
 
-func (h *Handler) checkGrafanaStatusAndStop() bool {
+func (h *Handler) checkGrafanaStatusAndStop() error {
 	// check deployment cattle-monitoring-system/rancher-monitoring-grafana replica
 	grafana, err := h.deploymentCache.Get(CattleMonitoringSystemNamespace, RancherMonitoringGrafana)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			logrus.Infof("grafana no found. skip")
-			return true
+			return nil
 		}
 		logrus.Errorf("grafana get error %v", err)
-		return false
+		return err
 	}
 
 	logrus.Infof("current Grafana replicas: %v", *grafana.Spec.Replicas)
@@ -738,24 +747,24 @@ func (h *Handler) checkGrafanaStatusAndStop() bool {
 
 		if _, err := h.deployments.Update(grafanaCopy); err != nil {
 			logrus.Errorf("Grafana update error %v", err)
-			return false
+			return err
 		}
-		return true
+		return nil
 	}
 
-	return true
+	return nil
 }
 
-func (h *Handler) checkVMImportControllerStatusAndStop() bool {
+func (h *Handler) checkVMImportControllerStatusAndStop() error {
 	// check deployment harvester-system/harvester-harvester-vm-import-controller replica
 	vmimportcontroller, err := h.deploymentCache.Get(HarvesterSystemNamespace, HarvesterVMImportController)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			logrus.Infof("VM import controller no found. skip")
-			return true
+			return nil
 		}
 		logrus.Errorf("vmimportcontroller get error %v", err)
-		return false
+		return err
 	}
 
 	// check stopped or not
@@ -768,39 +777,37 @@ func (h *Handler) checkVMImportControllerStatusAndStop() bool {
 
 		if _, err := h.deployments.Update(vmimportcontrollerCopy); err != nil {
 			logrus.Errorf("VM Import Controller update error %v", err)
-			return false
+			return err
 		}
-		return true
+		return nil
 	}
 
-	return true
+	return nil
 }
 
 // check Pod status, if all pods are stopped, return true
-func (h *Handler) checkPodStatusAndStop() bool {
-	allStopped := true
-
-	if !h.checkRancherMonitoringStatusAndStop() {
-		allStopped = false
+func (h *Handler) checkPodStatusAndStop() error {
+	if err := h.checkRancherMonitoringStatusAndStop(); err != nil {
+		return err
 	}
 
-	if !h.checkPrometheusStatusAndStop() {
-		allStopped = false
+	if err := h.checkPrometheusStatusAndStop(); err != nil {
+		return err
 	}
 
-	if !h.checkAltermanagerStatusAndStop() {
-		allStopped = false
+	if err := h.checkAltermanagerStatusAndStop(); err != nil {
+		return err
 	}
 
-	if !h.checkGrafanaStatusAndStop() {
-		allStopped = false
+	if err := h.checkGrafanaStatusAndStop(); err != nil {
+		return err
 	}
 
-	if !h.checkVMImportControllerStatusAndStop() {
-		allStopped = false
+	if err := h.checkVMImportControllerStatusAndStop(); err != nil {
+		return err
 	}
 
-	return allStopped
+	return nil
 }
 
 func (h *Handler) getLonghornStorageNetwork() (string, error) {
