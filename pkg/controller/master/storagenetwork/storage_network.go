@@ -185,6 +185,10 @@ func (h *Handler) OnStorageNetworkChange(key string, setting *harvesterv1.Settin
 	settingCopy := setting.DeepCopy()
 
 	if settingCopy.Annotations == nil {
+		if settingCopy.Value == "" {
+			// initialization case, don't update status, just skip it.
+			return setting, nil
+		}
 		settingCopy.Annotations = make(map[string]string)
 	}
 
