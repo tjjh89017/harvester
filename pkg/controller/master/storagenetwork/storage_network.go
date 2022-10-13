@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"reflect"
 	"strconv"
@@ -262,16 +261,23 @@ func (h *Handler) checkIsSameHashValue(setting *harvesterv1.Setting) bool {
 	return currentHash == savedHash
 }
 
-func (h *Handler) setHashAnnotations(setting *harvesterv1.Setting) {
+func (h *Handler) setHashAnnotations(setting *harvesterv1.Setting) *harvesterv1.Setting {
 	setting.Annotations[HashStorageNetworkAnnotation] = h.sha1(setting.Value)
+	return setting
 }
 
-func (h *Handler) createAndSaveNad(setting *harvesterv1.Setting) error {
+func (h *Handler) setNadAnnotations(setting *harvesterv1.Setting, newNad string) *harvesterv1.Setting {
+	setting.Annotations[OldNadStorageNetworkAnnotation] = setting.Annotations[NadStorageNetworkAnnotation]
+	setting.Annotations[NadStorageNetworkAnnotation] = newNad
+	return setting
+}
+
+func (h *Handler) createNad(setting *harvesterv1.Setting) (string, error) {
 	var config Config
 	bridgeConfig := NewBridgeConfig()
 
 	if err := json.Unmarshal([]byte(setting.Value), &config); err != nil {
-		return fmt.Errorf("parsing value error %v", err)
+		return "", fmt.Errorf("parsing value error %v", err)
 	}
 
 	bridgeConfig.Bridge = config.ClusterNetwork + BridgeSuffix
@@ -288,7 +294,7 @@ func (h *Handler) createAndSaveNad(setting *harvesterv1.Setting) error {
 
 	nadConfig, err := json.Marshal(bridgeConfig)
 	if err != nil {
-		return fmt.Errorf("output json error %v", err)
+		return "", fmt.Errorf("output json error %v", err)
 	}
 
 	nad := nadv1.NetworkAttachmentDefinition{
@@ -305,43 +311,35 @@ func (h *Handler) createAndSaveNad(setting *harvesterv1.Setting) error {
 	// create nad
 	var nadResult *nadv1.NetworkAttachmentDefinition
 	if nadResult, err = h.networkAttachmentDefinitions.Create(&nad); err != nil {
-		return fmt.Errorf("create net-attach-def failed %v", err)
+		return "", fmt.Errorf("create net-attach-def failed %v", err)
 	}
 
-	// save nad name
-	setting.Annotations[OldNadStorageNetworkAnnotation] = setting.Annotations[NadStorageNetworkAnnotation]
-	setting.Annotations[NadStorageNetworkAnnotation] = nadResult.Namespace + "/" + nadResult.Name
-
-	return nil
+	return fmt.Sprintf("%s/%s", nadResult.Namespace, nadResult.Name), nil
 }
 
 func (h *Handler) checkValueIsChanged(setting *harvesterv1.Setting) (*harvesterv1.Setting, error) {
 	var updatedSetting *harvesterv1.Setting
 	var err error
-	if !h.checkIsSameHashValue(setting) {
-		if setting.Value == "" {
-			setting.Annotations[OldNadStorageNetworkAnnotation] = setting.Annotations[NadStorageNetworkAnnotation]
-			setting.Annotations[NadStorageNetworkAnnotation] = ""
-			h.setHashAnnotations(setting)
+	nadName := ""
 
-			if updatedSetting, err = h.setConfiguredCondition(setting, false, ReasonInProgress, "enqueue"); err != nil {
-				return setting, fmt.Errorf("reset update status error %v", err)
-			}
-			return updatedSetting, errors.New("check hash again")
-		} else {
-			if err = h.createAndSaveNad(setting); err != nil {
-				return setting, err
-			}
+	if h.checkIsSameHashValue(setting) {
+		return setting, nil
+	}
 
-			h.setHashAnnotations(setting)
-
-			if updatedSetting, err = h.setConfiguredCondition(setting, false, ReasonInProgress, "create nad"); err != nil {
-				return setting, fmt.Errorf("create nad update status error %v", err)
-			}
-			return updatedSetting, errors.New("check hash again")
+	if setting.Value != "" {
+		nadName, err = h.createNad(setting)
+		if err != nil {
+			return setting, err
 		}
 	}
-	return setting, nil
+
+	setting = h.setNadAnnotations(setting, nadName)
+	setting = h.setHashAnnotations(setting)
+
+	if updatedSetting, err = h.setConfiguredCondition(setting, false, ReasonInProgress, "create NAD"); err != nil {
+		return setting, fmt.Errorf("create nad update status error %v", err)
+	}
+	return updatedSetting, fmt.Errorf("check hash again")
 }
 
 func (h *Handler) removeOldNad(setting *harvesterv1.Setting) error {
@@ -391,13 +389,12 @@ func (h *Handler) handleLonghornSettingPostConfig(setting *harvesterv1.Setting) 
 		return setting, fmt.Errorf("remove old nad error %v", err)
 	}
 
-	var s *harvesterv1.Setting
-	var err error
-	if s, err = h.setConfiguredCondition(settingCopy, true, ReasonCompleted, ""); err != nil {
+	updatedSetting, err := h.setConfiguredCondition(settingCopy, true, ReasonCompleted, "")
+	if err != nil {
 		return setting, fmt.Errorf("update status error %v", err)
 	}
 	// finish config
-	return s, nil
+	return updatedSetting, nil
 }
 
 // true: all detach
